@@ -182,10 +182,14 @@ class SavantHub:
         result = await self.installer.ensure(self.token, self.agent_port, restart=restart)
         self.last_repair = result
         _LOGGER.info("Savant agent on %s: %s", self.host, result)
+        updates = {}
         if self.installer.host_key and self.installer.host_key != self.entry.data.get(CONF_HOST_KEY):
-            self.hass.config_entries.async_update_entry(
-                self.entry, data={**self.entry.data, CONF_HOST_KEY: self.installer.host_key}
-            )
+            updates[CONF_HOST_KEY] = self.installer.host_key
+        if self.installer.port and self.installer.port != self.agent_port:
+            _LOGGER.warning("Savant agent on %s moved to port %d", self.host, self.installer.port)
+            self.agent_port = updates[CONF_AGENT_PORT] = self.installer.port
+        if updates:
+            self.hass.config_entries.async_update_entry(self.entry, data={**self.entry.data, **updates})
 
     async def _supervise(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         current: aiohttp.ClientWebSocketResponse | None = ws

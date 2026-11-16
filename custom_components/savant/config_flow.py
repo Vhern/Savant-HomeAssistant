@@ -63,7 +63,7 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
         async with conn:
             await installer.authorize_key(conn, public_key)
             await installer.install(conn, token, agent_port)
-            await installer.start(conn)
+            agent_port = await installer.start(conn, token, agent_port)
 
         keyed = Installer(self.hass, host, port, username, private_key=private_key, host_key=installer.host_key)
         async with await keyed.connect():
@@ -83,7 +83,10 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
         }
         return data, snapshot.get("host") or {}
 
+    error_detail = ""
+
     async def _try(self, errors: dict[str, str], **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        self.error_detail = ""
         try:
             return await self._provision(**kwargs)
         except AuthFailed:
@@ -93,12 +96,15 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
         except UnsupportedHost as err:
             _LOGGER.error("Unsupported Savant host platform: %s", err)
             errors["base"] = "unsupported_host"
+            self.error_detail = str(err)
         except InstallError as err:
             _LOGGER.error("Installing the Savant agent failed: %s", err)
             errors["base"] = "install_failed"
+            self.error_detail = str(err)
         except (AgentError, aiohttp.ClientError, TimeoutError, OSError) as err:
             _LOGGER.error("The Savant agent did not answer: %s", err)
             errors["base"] = "agent_unreachable"
+            self.error_detail = str(err) or type(err).__name__
         except Exception:
             _LOGGER.exception("Unexpected error setting up Savant")
             errors["base"] = "unknown"
@@ -124,6 +130,7 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=self.add_suggested_values_to_schema(USER_SCHEMA, user_input),
             errors=errors,
+            description_placeholders={"error": self.error_detail[-400:]},
         )
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
@@ -151,7 +158,11 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=REAUTH_SCHEMA,
             errors=errors,
-            description_placeholders={"host": entry.data[CONF_HOST], "username": entry.data[CONF_USERNAME]},
+            description_placeholders={
+                "host": entry.data[CONF_HOST],
+                "username": entry.data[CONF_USERNAME],
+                "error": self.error_detail[-400:],
+            },
         )
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -177,4 +188,5 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reconfigure",
             data_schema=self.add_suggested_values_to_schema(USER_SCHEMA, user_input or suggested),
             errors=errors,
+            description_placeholders={"error": self.error_detail[-400:]},
         )

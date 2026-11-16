@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import socket
 import subprocess
 import time
 from unittest.mock import patch
@@ -14,7 +15,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.savant.const import CONF_PRIVATE_KEY, DOMAIN
-from custom_components.savant.installer import AuthFailed, Installer
+from custom_components.savant.installer import AuthFailed, Installer, InstallError
 
 from .conftest import BATH_TIME, HOST_UID, OLD_VERSION, TOKEN, VERSION, wait_for
 
@@ -237,3 +238,37 @@ async def test_tv_apps(hass: HomeAssistant, savant_host) -> None:
     assert hass.states.get("media_player.room_1_media").attributes["source"] == "HD TV"
     tv = hass.states.get("media_player.room_1_hd_tv")
     assert tv.state == "on" and tv.attributes["source"] == "Netflix" and tv.attributes["app_name"] == "Netflix"
+
+
+async def test_setup_moves_to_a_free_port(hass: HomeAssistant, savant_host) -> None:
+    taken = socket.socket()
+    taken.bind(("127.0.0.1", savant_host.port))
+    taken.listen()
+    try:
+        with (
+            patch("custom_components.savant.config_flow.secrets.token_urlsafe", return_value=TOKEN),
+            patch("custom_components.savant.config_flow.DEFAULT_AGENT_PORT", savant_host.port),
+        ):
+            result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+            result = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {"host": "127.0.0.1", "username": "RPM", "password": "secret", "ssh_port": 22}
+            )
+            await hass.async_block_till_done()
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"]["agent_port"] == savant_host.port + 1
+        assert hass.states.get("binary_sensor.vhern_s_connection").state == "on"
+    finally:
+        taken.close()
+
+
+async def test_setup_shows_the_host_error(hass: HomeAssistant, savant_host) -> None:
+    with patch(
+        "custom_components.savant.installer.Installer.install",
+        side_effect=InstallError("remote command failed (1): sclibridge not found"),
+    ):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"host": "127.0.0.1", "username": "RPM", "password": "secret", "ssh_port": 22}
+        )
+    assert result["errors"] == {"base": "install_failed"}
+    assert "sclibridge not found" in result["description_placeholders"]["error"]

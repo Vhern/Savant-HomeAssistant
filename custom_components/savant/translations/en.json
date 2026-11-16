@@ -36,9 +36,9 @@
     "error": {
       "cannot_connect": "Couldn't reach the host over SSH.",
       "invalid_auth": "The host rejected the username or password.",
-      "unsupported_host": "This host's operating system or processor isn't supported.",
-      "install_failed": "Installing the agent on the host failed. Check the Home Assistant logs for details.",
-      "agent_unreachable": "The agent was installed, but Home Assistant can't reach it. Make sure port 8765 on the host is open.",
+      "unsupported_host": "This host's operating system or processor isn't supported: {error}",
+      "install_failed": "Installing the agent on the host failed: {error}",
+      "agent_unreachable": "The agent was installed, but Home Assistant can't reach it: {error}",
       "unknown": "Something unexpected went wrong. Check the Home Assistant logs for details."
     },
     "abort": {

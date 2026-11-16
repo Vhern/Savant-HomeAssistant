@@ -17,6 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 
 BIN_DIR = Path(__file__).parent / "bin"
 LISTEN_ADDR = "0.0.0.0"
+PORT_TRIES = 10
 
 BINARIES = {
     ("Linux", "armv7l"): "savant-ha-linux-armv7",
@@ -122,6 +123,7 @@ class Installer:
         self.private_key = private_key
         self.password = password
         self.host_key = host_key
+        self.port: int | None = None
 
     async def connect(self) -> asyncssh.SSHClientConnection:
         if self.host_key:
@@ -215,22 +217,37 @@ else mv -f "$D/config.json.new" "$D/config.json"; echo changed; fi
         )
         return "changed" in out
 
-    async def start(self, conn: asyncssh.SSHClientConnection) -> None:
-        await self._run(conn, _STOP)
-        await self._run(conn, _START)
+    async def start(self, conn: asyncssh.SSHClientConnection, token: str, agent_port: int) -> int:
+        """Start the agent, moving to the next port if something else holds this one. Returns the port."""
+        port = agent_port
+        for _ in range(PORT_TRIES):
+            await self._run(conn, _STOP)
+            try:
+                await self._run(conn, _START)
+            except InstallError as err:
+                if "address already in use" not in str(err):
+                    raise
+                _LOGGER.warning("Port %d is taken on %s, trying %d", port, self.host, port + 1)
+                port += 1
+                await self.write_config(conn, token, port)
+                continue
+            self.port = port
+            return port
+        raise InstallError(f"ports {agent_port}-{port - 1} are all taken on the host")
 
     async def ensure(self, token: str, agent_port: int, *, restart: bool = False) -> str:
         want = await self.hass.async_add_executor_job(bundled_version)
+        self.port = agent_port
         conn = await self.connect()
         async with conn:
             st = await self.status(conn)
             if st.version != want:
                 await self.install(conn, token, agent_port)
-                await self.start(conn)
+                await self.start(conn, token, agent_port)
                 return "updated" if st.version else "installed"
             changed = await self.write_config(conn, token, agent_port)
             if restart or changed or not st.running:
-                await self.start(conn)
+                await self.start(conn, token, agent_port)
                 return "restarted" if st.running else "started"
             return "running"
 
