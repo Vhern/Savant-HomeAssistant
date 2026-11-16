@@ -6,6 +6,7 @@ import shutil
 import socket
 import subprocess
 import time
+from ipaddress import ip_address
 from unittest.mock import patch
 
 from homeassistant.config_entries import ConfigEntryState
@@ -13,6 +14,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.savant.const import CONF_PRIVATE_KEY, DOMAIN
 from custom_components.savant.installer import AuthFailed, Installer, InstallError
@@ -272,3 +275,57 @@ async def test_setup_shows_the_host_error(hass: HomeAssistant, savant_host) -> N
         )
     assert result["errors"] == {"base": "install_failed"}
     assert "sclibridge not found" in result["description_placeholders"]["error"]
+
+
+def discovery(host: str = "127.0.0.1") -> ZeroconfServiceInfo:
+    return ZeroconfServiceInfo(
+        ip_address=ip_address(host),
+        ip_addresses=[ip_address(host)],
+        port=39359,
+        hostname="sav-001aae0775260000.local.",
+        type="_pres_sdo._tcp.local.",
+        name="001aae0775260000._pres_sdo._tcp.local.",
+        properties={"SystemName": "Vherns", "PrimaryUID": "001aae0775260000"},
+    )
+
+
+async def test_discovered_host_setup(hass: HomeAssistant, savant_host) -> None:
+    with (
+        patch("custom_components.savant.config_flow.secrets.token_urlsafe", return_value=TOKEN),
+        patch("custom_components.savant.config_flow.DEFAULT_AGENT_PORT", savant_host.port),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "zeroconf"}, data=discovery()
+        )
+        assert result["type"] is FlowResultType.FORM and result["step_id"] == "zeroconf_confirm"
+        assert result["description_placeholders"]["name"] == "Vherns"
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"username": "RPM", "password": "secret", "ssh_port": 22}
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["host"] == "127.0.0.1" and result["data"]["primary_uid"] == "001aae0775260000"
+    assert result["result"].unique_id == HOST_UID
+
+
+async def test_discovery_skips_configured_host(hass: HomeAssistant, savant_host) -> None:
+    savant_host.entry().add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "zeroconf"}, data=discovery())
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == "already_configured"
+
+
+async def test_discovery_follows_a_new_ip(hass: HomeAssistant, savant_host) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=HOST_UID, data={**savant_host.entry().data, "host": "10.9.9.9", "primary_uid": "001aae0775260000"}
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "zeroconf"}, data=discovery())
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == "already_configured"
+    assert entry.data["host"] == "127.0.0.1"
+
+
+async def test_discovery_needs_a_savant_id(hass: HomeAssistant) -> None:
+    info = discovery()
+    info.properties.pop("PrimaryUID")
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "zeroconf"}, data=info)
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == "not_savant"

@@ -15,6 +15,18 @@
           "username": "The login on the Savant host, usually RPM."
         }
       },
+      "zeroconf_confirm": {
+        "title": "Set up {name}",
+        "description": "Found the Savant host {name} at {host}. Home Assistant logs in over SSH once to install its agent and an SSH key. Your password isn't saved.",
+        "data": {
+          "username": "Username",
+          "password": "Password",
+          "ssh_port": "SSH port"
+        },
+        "data_description": {
+          "username": "The login on the Savant host, usually RPM."
+        }
+      },
       "reauth_confirm": {
         "title": "Log in to the Savant host again",
         "description": "Home Assistant can't log in to {host} as {username} anymore, so it can't update or repair its agent. Enter the password to set up a new key.",
@@ -34,7 +46,7 @@
       }
     },
     "error": {
-      "cannot_connect": "Couldn't reach the host over SSH.",
+      "cannot_connect": "Couldn't reach the host over SSH: {error}",
       "invalid_auth": "The host rejected the username or password.",
       "unsupported_host": "This host's operating system or processor isn't supported: {error}",
       "install_failed": "Installing the agent on the host failed: {error}",
@@ -45,8 +57,10 @@
       "already_configured": "This Savant host is already set up.",
       "reauth_successful": "Logged in again and the agent is running.",
       "reconfigure_successful": "Connection updated.",
-      "unique_id_mismatch": "That's a different Savant host."
-    }
+      "unique_id_mismatch": "That's a different Savant host.",
+      "not_savant": "This doesn't look like a Savant host."
+    },
+    "flow_title": "{name}"
   },
   "entity": {
     "binary_sensor": {

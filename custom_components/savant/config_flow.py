@@ -9,13 +9,15 @@ from typing import Any
 
 import aiohttp
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntryState, ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .const import (
     CONF_AGENT_PORT,
     CONF_HOST_KEY,
+    CONF_PRIMARY_UID,
     CONF_PRIVATE_KEY,
     CONF_SSH_PORT,
     CONF_TOKEN,
@@ -40,6 +42,13 @@ _LOGGER = logging.getLogger(__name__)
 USER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST): str,
+        vol.Required(CONF_USERNAME, default=DEFAULT_USERNAME): str,
+        vol.Required(CONF_PASSWORD): str,
+        vol.Optional(CONF_SSH_PORT, default=DEFAULT_SSH_PORT): vol.All(int, vol.Range(1, 65535)),
+    }
+)
+CONFIRM_SCHEMA = vol.Schema(
+    {
         vol.Required(CONF_USERNAME, default=DEFAULT_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
         vol.Optional(CONF_SSH_PORT, default=DEFAULT_SSH_PORT): vol.All(int, vol.Range(1, 65535)),
@@ -91,8 +100,10 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self._provision(**kwargs)
         except AuthFailed:
             errors["base"] = "invalid_auth"
-        except (CannotConnect, HostKeyChanged):
+        except (CannotConnect, HostKeyChanged) as err:
+            _LOGGER.error("SSH to the Savant host failed: %s", err)
             errors["base"] = "cannot_connect"
+            self.error_detail = str(err)
         except UnsupportedHost as err:
             _LOGGER.error("Unsupported Savant host platform: %s", err)
             errors["base"] = "unsupported_host"
@@ -131,6 +142,58 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=self.add_suggested_values_to_schema(USER_SCHEMA, user_input),
             errors=errors,
             description_placeholders={"error": self.error_detail[-400:]},
+        )
+
+    async def async_step_zeroconf(self, discovery_info: ZeroconfServiceInfo) -> ConfigFlowResult:
+        """A Savant host announcing itself as _pres_sdo._tcp."""
+        uid = (discovery_info.properties.get("PrimaryUID") or "").lower()
+        if not uid:
+            return self.async_abort(reason="not_savant")
+        ipv4 = [ip for ip in discovery_info.ip_addresses if ip.version == 4]
+        host = str(ipv4[0] if ipv4 else discovery_info.ip_address)
+        name = discovery_info.properties.get("SystemName") or discovery_info.hostname.removesuffix(".local.")
+
+        for entry in self._async_current_entries(include_ignore=False):
+            if entry.data.get(CONF_PRIMARY_UID) == uid:
+                if entry.data.get(CONF_HOST) != host:
+                    self.hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_HOST: host})
+                    if entry.state is ConfigEntryState.LOADED:
+                        self.hass.config_entries.async_schedule_reload(entry.entry_id)
+                return self.async_abort(reason="already_configured")
+        self._async_abort_entries_match({CONF_HOST: host})
+        await self.async_set_unique_id(uid)
+        self._abort_if_unique_id_configured()
+
+        self.discovered = {CONF_HOST: host, CONF_PRIMARY_UID: uid, "name": name}
+        self.context["title_placeholders"] = {"name": name}
+        return await self.async_step_zeroconf_confirm()
+
+    async def async_step_zeroconf_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        found = self.discovered
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            res = await self._try(
+                errors,
+                host=found[CONF_HOST],
+                port=user_input[CONF_SSH_PORT],
+                username=user_input[CONF_USERNAME],
+                password=user_input[CONF_PASSWORD],
+            )
+            if res:
+                data, info = res
+                data[CONF_PRIMARY_UID] = found[CONF_PRIMARY_UID]
+                await self.async_set_unique_id(info.get("uid") or found[CONF_PRIMARY_UID], raise_on_progress=False)
+                self._abort_if_unique_id_configured(updates={CONF_HOST: data[CONF_HOST]})
+                return self.async_create_entry(title=info.get("name") or found["name"], data=data)
+        return self.async_show_form(
+            step_id="zeroconf_confirm",
+            data_schema=self.add_suggested_values_to_schema(CONFIRM_SCHEMA, user_input),
+            errors=errors,
+            description_placeholders={
+                "name": found["name"],
+                "host": found[CONF_HOST],
+                "error": self.error_detail[-400:],
+            },
         )
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:

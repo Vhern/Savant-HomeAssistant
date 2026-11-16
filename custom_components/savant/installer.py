@@ -123,7 +123,7 @@ class Installer:
         self.private_key = private_key
         self.password = password
         self.host_key = host_key
-        self.port: int | None = None
+        self.agent_port: int | None = None
 
     async def connect(self) -> asyncssh.SSHClientConnection:
         if self.host_key:
@@ -231,13 +231,13 @@ else mv -f "$D/config.json.new" "$D/config.json"; echo changed; fi
                 port += 1
                 await self.write_config(conn, token, port)
                 continue
-            self.port = port
+            self.agent_port = port
             return port
         raise InstallError(f"ports {agent_port}-{port - 1} are all taken on the host")
 
     async def ensure(self, token: str, agent_port: int, *, restart: bool = False) -> str:
         want = await self.hass.async_add_executor_job(bundled_version)
-        self.port = agent_port
+        self.agent_port = agent_port
         conn = await self.connect()
         async with conn:
             st = await self.status(conn)

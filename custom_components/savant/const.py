@@ -9,6 +9,7 @@ CONF_PRIVATE_KEY = "private_key"
 CONF_HOST_KEY = "host_key"
 CONF_TOKEN = "token"
 CONF_AGENT_PORT = "agent_port"
+CONF_PRIMARY_UID = "primary_uid"
 
 DEFAULT_USERNAME = "RPM"
 DEFAULT_SSH_PORT = 22

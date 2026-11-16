@@ -36,7 +36,7 @@ Download `savant.zip` from the latest release, unzip it into `config/custom_comp
 
 ## Setup
 
-Go to Settings > Devices & services > Add integration, pick Savant, and enter the host's address, user and password.
+Home Assistant finds Savant hosts on your network by itself. They show up under Settings > Devices & services as discovered, so you only enter the user and password. To add one by hand, go to Add integration, pick Savant, and enter the host's address too.
 
 The password is only used during setup. Home Assistant installs its own SSH key on the host and uses that from then on. If the key stops working, Home Assistant asks for the password again.
 

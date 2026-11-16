@@ -185,9 +185,9 @@ class SavantHub:
         updates = {}
         if self.installer.host_key and self.installer.host_key != self.entry.data.get(CONF_HOST_KEY):
             updates[CONF_HOST_KEY] = self.installer.host_key
-        if self.installer.port and self.installer.port != self.agent_port:
-            _LOGGER.warning("Savant agent on %s moved to port %d", self.host, self.installer.port)
-            self.agent_port = updates[CONF_AGENT_PORT] = self.installer.port
+        if self.installer.agent_port and self.installer.agent_port != self.agent_port:
+            _LOGGER.warning("Savant agent on %s moved to port %d", self.host, self.installer.agent_port)
+            self.agent_port = updates[CONF_AGENT_PORT] = self.installer.agent_port
         if updates:
             self.hass.config_entries.async_update_entry(self.entry, data={**self.entry.data, **updates})
 
