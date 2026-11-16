@@ -105,6 +105,10 @@ class SavantRoom(SavantPlayer):
     def is_volume_muted(self) -> bool | None:
         return self.data.get("muted")
 
+    @property
+    def app_name(self) -> str | None:
+        return self.data.get("app")
+
     async def async_turn_off(self) -> None:
         await self.command("turn_off", {"on": False, "source": None})
 
@@ -114,3 +118,20 @@ class SavantRoom(SavantPlayer):
 
 class SavantSource(SavantPlayer):
     _attr_icon = "mdi:play-box-outline"
+
+    def __init__(self, hub, meta) -> None:
+        super().__init__(hub, meta)
+        if apps := self.attrs.get("sources"):
+            self._attr_source_list = list(apps)
+            self._attr_supported_features |= F.SELECT_SOURCE
+
+    @property
+    def source(self) -> str | None:
+        return self.data.get("source") if self.source_list else None
+
+    @property
+    def app_name(self) -> str | None:
+        return self.source
+
+    async def async_select_source(self, source: str) -> None:
+        await self.command("select_source", {"on": True, "source": source}, source=source)

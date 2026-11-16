@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -347,6 +348,12 @@ func buildMediaRoom(inv *Inventory, zone string) *MediaRoom {
 		if src.Service.Type == "" || betterPrimary(s, src.Service) {
 			src.Service, src.Primary = s, def
 		}
+		if def != nil && def.AppName != "" && src.app(appLabel(def.AppName)) == nil {
+			src.Apps = append(src.Apps, App{Name: appLabel(def.AppName), Service: s})
+		}
+	}
+	for _, src := range byName {
+		sortApps(src)
 	}
 	if len(byName) == 0 {
 		return nil
@@ -381,8 +388,38 @@ func buildMediaRoom(inv *Inventory, zone string) *MediaRoom {
 	return room
 }
 
+var camelGap = regexp.MustCompile(`([a-z])([A-Z])`)
+
+// appLabel turns names like "AmazonVideo" or "YoutubeTV" into "Amazon Video", "Youtube TV".
+func appLabel(name string) string {
+	return camelGap.ReplaceAllString(strings.TrimSpace(name), "$1 $2")
+}
+
+// sortApps puts the device's own main service first, then the apps by name.
+// A source with only one service has no app list.
+func sortApps(src *Source) {
+	if len(src.Apps) < 2 {
+		src.Apps = nil
+		return
+	}
+	sort.SliceStable(src.Apps, func(i, j int) bool {
+		a, b := src.Apps[i], src.Apps[j]
+		if (a.Service == src.Service) != (b.Service == src.Service) {
+			return a.Service == src.Service
+		}
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	})
+}
+
 func sourcePlayer(room *MediaRoom, src *Source) *SourcePlayer {
 	attrs := map[string]any{"kind": "source", "device_class": ""}
+	if len(src.Apps) > 0 {
+		var names []string
+		for _, a := range src.Apps {
+			names = append(names, a.Name)
+		}
+		attrs["sources"] = names
+	}
 	if src.Service.Type == "SVC_AV_TV" {
 		attrs["device_class"] = "tv"
 	}

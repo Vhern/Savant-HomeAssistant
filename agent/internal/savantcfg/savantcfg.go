@@ -230,6 +230,7 @@ type ServiceDef struct {
 	LogicalComponent string
 	Variant          string
 	Alias            string
+	AppName          string // the app on the TV, from <internal name_on_component>
 	Enabled          bool
 	Requests         map[string][]string
 }
@@ -319,6 +320,10 @@ func parseServices(r io.Reader) (*Services, error) {
 					LogicalComponent: a["source_logical_component"], Variant: a["variant_id"],
 					Alias: a["service_alias"], Enabled: a["enabled"] != "false",
 					Requests: map[string][]string{},
+				}
+			case svc != nil && depth == 0 && t.Name.Local == "internal" && a["name_on_component"] != "":
+				if svc.AppName == "" {
+					svc.AppName = a["name_on_component"]
 				}
 			case svc != nil && t.Name.Local == "request" && req == "" && depth == 0:
 				if a["inter-service"] != "true" && a["name"] != "" {

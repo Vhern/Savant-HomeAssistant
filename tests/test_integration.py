@@ -214,3 +214,20 @@ async def test_app_scenes(hass: HomeAssistant, savant_host) -> None:
         check=True,
     )
     await wait_for(hass, lambda: hass.states.get("scene.vhern_s_good_night") is not None, timeout=30)
+
+
+async def test_tv_apps(hass: HomeAssistant, savant_host) -> None:
+    await setup(hass, savant_host)
+    tv = hass.states.get("media_player.room_1_hd_tv")
+    assert tv.attributes["source_list"][:2] == ["LG Channels", "Amazon Video"]
+    assert "Netflix" in tv.attributes["source_list"]
+    assert "source_list" not in hass.states.get("media_player.room_1_ps5").attributes
+
+    await hass.services.async_call(
+        "media_player", "select_source", {"entity_id": "media_player.room_1_hd_tv", "source": "Netflix"}, blocking=True
+    )
+    assert "servicerequest Room 1 HD TV HD_monitor 7 SVC_AV_EXTERNALMEDIASERVER PowerOn" in savant_host.log()
+    await wait_for(hass, lambda: hass.states.get("media_player.room_1_media").attributes.get("app_name") == "Netflix")
+    assert hass.states.get("media_player.room_1_media").attributes["source"] == "HD TV"
+    tv = hass.states.get("media_player.room_1_hd_tv")
+    assert tv.state == "on" and tv.attributes["source"] == "Netflix" and tv.attributes["app_name"] == "Netflix"

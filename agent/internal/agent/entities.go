@@ -283,12 +283,37 @@ func (s *Scene) Do(ctx context.Context, x Executor, action string, _ Params) err
 }
 
 // A TV's built-in app inputs all share its name, so one source can map to
-// several services. Primary is the one that gets powered on.
+// several services. Primary is the one that gets powered on; Apps lists the
+// services that open an app on the device (Netflix, Hulu...), when it has them.
 type Source struct {
 	Name     string
 	Primary  *savantcfg.ServiceDef
 	Service  transport.Service
 	Services map[string]bool
+	Apps     []App
+}
+
+type App struct {
+	Name    string
+	Service transport.Service
+}
+
+func (s *Source) app(name string) *App {
+	for i := range s.Apps {
+		if strings.EqualFold(s.Apps[i].Name, name) {
+			return &s.Apps[i]
+		}
+	}
+	return nil
+}
+
+func (s *Source) appFor(dash string) string {
+	for _, a := range s.Apps {
+		if a.Service.Dash() == dash {
+			return a.Name
+		}
+	}
+	return ""
 }
 
 type MediaRoom struct {
@@ -334,6 +359,9 @@ func (m *MediaRoom) State(v Values) map[string]any {
 	st := map[string]any{"on": src != nil, "source": nil}
 	if src != nil {
 		st["source"] = src.Name
+		if app := src.appFor(m.activeDash()); app != "" {
+			st["app"] = app
+		}
 		m.mu.Lock()
 		m.lastSource = src.Name
 		m.mu.Unlock()
@@ -372,11 +400,7 @@ func (m *MediaRoom) Do(ctx context.Context, x Executor, action string, p Params)
 		if src == nil {
 			return fmt.Errorf("%s: unknown source %q", m.ID, name)
 		}
-		if err := x.ServiceRequest(ctx, transport.Request{Service: src.Service, Name: "PowerOn"}); err != nil {
-			return err
-		}
-		m.setActive(src.Service.Dash())
-		return nil
+		return m.powerOn(ctx, x, src.Service)
 	}
 
 	src, svc := m.current()
@@ -436,17 +460,47 @@ func (s *SourcePlayer) State(v Values) map[string]any {
 	if !ok {
 		return nil
 	}
-	return map[string]any{"on": s.Source.Services[strings.TrimSpace(raw)]}
+	active := strings.TrimSpace(raw)
+	st := map[string]any{"on": s.Source.Services[active]}
+	if len(s.Source.Apps) > 0 {
+		var app any
+		if name := s.Source.appFor(active); name != "" {
+			app = name
+		}
+		st["source"] = app
+	}
+	return st
 }
 
 func (s *SourcePlayer) Do(ctx context.Context, x Executor, action string, p Params) error {
-	if action == "turn_on" {
-		return s.Room.Do(ctx, x, "select_source", Params{"source": s.Source.Name})
+	switch action {
+	case "turn_on":
+		return s.Room.powerOn(ctx, x, s.Source.Service)
+	case "select_source":
+		app := s.Source.app(p.String("source"))
+		if app == nil {
+			return fmt.Errorf("%s has no app %q", s.Source.Name, p.String("source"))
+		}
+		return s.Room.powerOn(ctx, x, app.Service)
 	}
 	if src, _ := s.Room.current(); src != s.Source {
 		return fmt.Errorf("%s isn't playing in %s", s.Source.Name, s.Room.Zone)
 	}
 	return s.Room.Do(ctx, x, action, p)
+}
+
+func (m *MediaRoom) powerOn(ctx context.Context, x Executor, svc transport.Service) error {
+	if err := x.ServiceRequest(ctx, transport.Request{Service: svc, Name: "PowerOn"}); err != nil {
+		return err
+	}
+	m.setActive(svc.Dash())
+	return nil
+}
+
+func (m *MediaRoom) activeDash() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.active
 }
 
 // setActive records what a command just did, so the next command goes to the

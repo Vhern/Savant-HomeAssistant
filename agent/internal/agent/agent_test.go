@@ -420,3 +420,41 @@ func TestSourcePlayers(t *testing.T) {
 		t.Errorf("requests:\n%s", got)
 	}
 }
+
+func TestTVApps(t *testing.T) {
+	host := &fakeHost{states: map[string]string{}}
+	ents := byID(mustBuild(t))
+	room := ents["media_player.room_1"].(*MediaRoom)
+	tv := ents["media_player.room_1_hd_tv"].(*SourcePlayer)
+	ps5 := ents["media_player.room_1_ps5"].(*SourcePlayer)
+
+	want := "LG Channels,Amazon Video,Apple TV,Disney+,External Media (USB),Google Play,Hulu,Netflix,Sling TV,Vudu,Youtube,Youtube Kids,Youtube TV"
+	if got := strings.Join(tv.Attributes["sources"].([]string), ","); got != want {
+		t.Errorf("TV apps:\n got %s\nwant %s", got, want)
+	}
+	if _, ok := ps5.Attributes["sources"]; ok {
+		t.Error("the PS5 has no apps and should have no source list")
+	}
+
+	netflix := Values{active: "Room 1-HD TV-HD_monitor-7-SVC_AV_EXTERNALMEDIASERVER"}
+	if st := tv.State(netflix); st["on"] != true || st["source"] != "Netflix" {
+		t.Errorf("tv state = %v", st)
+	}
+	if st := room.State(netflix); st["source"] != "HD TV" || st["app"] != "Netflix" {
+		t.Errorf("room state = %v", st)
+	}
+	if st := room.State(Values{active: "Room 1-PS5-Game_console-1-SVC_AV_GAME"}); st["app"] != nil {
+		t.Errorf("PS5 has no app: %v", st)
+	}
+
+	ctx := context.Background()
+	must(t, tv.Do(ctx, host, "select_source", Params{"source": "Hulu"}))
+	must(t, tv.Do(ctx, host, "turn_on", nil))
+	if err := tv.Do(ctx, host, "select_source", Params{"source": "Spotify"}); err == nil {
+		t.Error("an app the TV doesn't have should fail")
+	}
+	got := strings.Join(host.reqs, "\n")
+	if got != "Room 1|HD TV|HD_monitor|6|SVC_AV_EXTERNALMEDIASERVER PowerOn\nRoom 1|HD TV|HD_monitor|1|SVC_AV_TV PowerOn" {
+		t.Errorf("requests:\n%s", got)
+	}
+}

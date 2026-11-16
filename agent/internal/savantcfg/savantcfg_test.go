@@ -46,6 +46,15 @@ func TestReadServicesFixture(t *testing.T) {
 	if got := light.Requests["DimmerSet"]; !reflect.DeepEqual(got[:9], want) {
 		t.Errorf("DimmerSet args = %v", got)
 	}
+	apps := map[string]string{"1": "AmazonVideo", "3": "Disney+", "7": "Netflix", "12": "YoutubeTV"}
+	for v, want := range apps {
+		if d := s.Find("Room 1", "HD TV 2", "HD_monitor", "SVC_AV_EXTERNALMEDIASERVER", v); d == nil || d.AppName != want {
+			t.Errorf("HD TV 2 variant %s app = %+v, want %s", v, d, want)
+		}
+	}
+	if d := s.Find("Room 1", "PS5", "Game_console", "SVC_AV_GAME", "1"); d.AppName != "" {
+		t.Errorf("PS5 has no app, got %q", d.AppName)
+	}
 	tv := s.Find("Room 1", "HD TV", "HD_monitor", "SVC_AV_TV", "1")
 	if tv == nil || tv.Alias != "HD TV" || !tv.HasRequest("PowerOn") || !tv.HasRequest("MuteOn") || tv.HasRequest("SetVolume") {
 		t.Errorf("tv = %+v", tv)

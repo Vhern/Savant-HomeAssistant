@@ -10,6 +10,7 @@ You add it with the Savant host's IP address, user and password. Home Assistant 
 - Shades with open, close, stop and position
 - Door locks
 - A media player for each room, and one for each source in it (a PS5, a TV), with on/off, source, volume and mute
+- The apps a TV has in Blueprint (Netflix, Hulu, YouTube...) as that TV's source list, with the running app shown on the room
 - Savant scenes, including the ones you make in the Savant app
 - Host CPU, memory, disk and uptime sensors
 - A `savant.service_request` action for anything else, using the same service requests as Blueprint
