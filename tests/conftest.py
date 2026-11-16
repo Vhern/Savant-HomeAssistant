@@ -1,0 +1,209 @@
+"""Fake Savant host: the real agent binary, a local shell instead of SSH, and a fake sclibridge."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import gzip
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.savant.const import (
+    CONF_AGENT_PORT,
+    CONF_HOST_KEY,
+    CONF_PRIVATE_KEY,
+    CONF_SSH_PORT,
+    CONF_TOKEN,
+    DOMAIN,
+)
+from custom_components.savant.installer import BINARIES
+
+ROOT = Path(__file__).parent.parent
+FIXTURES = ROOT / "agent" / "testdata"
+TOKEN = "test-token"
+HOST_UID = "842F579B837F0000"
+VERSION = "9.9.9"
+OLD_VERSION = "9.9.8"
+
+INITIAL_STATES = {
+    "Room 1.ActiveService": "",
+    "Door Lock Controller.Door_lock.DoorLockStatus_1": "Unlocked",
+    "Vhern's.SoftwareVersion": "9.4.6:696",
+    "Vhern's.SystemName": "Vhern's",
+    "Vhern's.DeviceModel": "Smart Host",
+    "Vhern's.SysStatus.CPUPercent": "5.4",
+    "Vhern's.SysStatus.RAMPercent": "23.1",
+    "Vhern's.SysStatus.FreeDiskSpacePercentage": "28",
+    "Vhern's.SysStatus.Uptime.Days": "3",
+}
+
+
+@pytest.fixture(autouse=True)
+def auto_enable_custom_integrations(enable_custom_integrations):
+    yield
+
+
+def _binary_name() -> str:
+    os_, arch = os.uname().sysname, os.uname().machine
+    return BINARIES[(os_, arch)]
+
+
+def _build(out_dir: Path, version: str) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["go", "build", "-ldflags", f"-X main.version={version}", "-o", str(out_dir / _binary_name()), "./cmd/savant-ha"],
+        cwd=ROOT / "agent",
+        check=True,
+        env={**os.environ, "CGO_ENABLED": "0"},
+    )
+    (out_dir / "VERSION").write_text(version + "\n")
+    return out_dir
+
+
+@pytest.fixture(scope="session")
+def bin_dirs(tmp_path_factory) -> dict[str, Path]:
+    base = tmp_path_factory.mktemp("bin")
+    return {VERSION: _build(base / "new", VERSION), OLD_VERSION: _build(base / "old", OLD_VERSION)}
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class Result:
+    def __init__(self, stdout, stderr, exit_status):
+        self.stdout, self.stderr, self.exit_status = stdout, stderr, exit_status
+
+
+class LocalConn:
+    def __init__(self, env: dict[str, str]) -> None:
+        self.env = env
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def close(self) -> None:
+        pass
+
+    async def run(self, cmd, input=None, encoding="utf-8", timeout=None):
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, env=self.env,
+        )
+        data = input.encode() if isinstance(input, str) else input
+        out, err = await asyncio.wait_for(proc.communicate(data), timeout)
+        if encoding:
+            out, err = out.decode(encoding), err.decode(encoding)
+        return Result(out, err, proc.returncode)
+
+
+@dataclass
+class FakeHost:
+    home: Path
+    state_file: Path
+    log_file: Path
+    port: int
+    env: dict[str, str]
+    bin_dirs: dict[str, Path]
+
+    def entry(self) -> MockConfigEntry:
+        return MockConfigEntry(
+            domain=DOMAIN,
+            title="Vhern's",
+            unique_id=HOST_UID,
+            data={
+                "host": "127.0.0.1",
+                CONF_SSH_PORT: 22,
+                "username": "RPM",
+                CONF_PRIVATE_KEY: "unused",
+                CONF_HOST_KEY: "ssh-ed25519 AAAAtest",
+                CONF_TOKEN: TOKEN,
+                CONF_AGENT_PORT: self.port,
+            },
+        )
+
+    @property
+    def agent_dir(self) -> Path:
+        return self.home / ".savant-ha"
+
+    def log(self) -> str:
+        return self.log_file.read_text() if self.log_file.exists() else ""
+
+    def kill_agent(self) -> None:
+        pid_file = self.agent_dir / "agent.pid"
+        if pid_file.exists():
+            with contextlib.suppress(ProcessLookupError, ValueError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        time.sleep(0.2)
+
+
+@pytest.fixture
+def savant_host(socket_enabled, tmp_path, bin_dirs):
+    home = tmp_path / "home"
+    (home / "bin").mkdir(parents=True)
+    shutil.copy(Path(__file__).parent / "fake_sclibridge.sh", home / "bin" / "sclibridge")
+    (home / "bin" / "sclibridge").chmod(0o755)
+    for rel in (
+        "Library/Application Support/RacePointMedia/userConfig.rpmConfig",
+        "GNUstep/Library/ApplicationSupport/RacePointMedia/userConfig.rpmConfig",
+    ):
+        cfg = home / rel
+        cfg.mkdir(parents=True)
+        shutil.copy(FIXTURES / "shr2000-dataTableInfo.plist", cfg / "dataTableInfo.plist")
+        shutil.copy(FIXTURES / "shr2000-uimanifest.json", cfg / "uimanifest.json")
+        with gzip.open(FIXTURES / "shr2000-serviceImplementation.xml.gz") as src:
+            (cfg / "serviceImplementation.xml").write_bytes(src.read())
+    state = tmp_path / "state.txt"
+    state.write_text("".join(f"{k}={v}\n" for k, v in INITIAL_STATES.items()))
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "PATH": f"{home / 'bin'}:{os.environ['PATH']}",
+        "FAKE_STATE": str(state),
+        "FAKE_LOG": str(tmp_path / "sclibridge.log"),
+        "FAKE_SERVICES": str(FIXTURES / "shr2000-servicesforzone-room1.txt"),
+    }
+    host = FakeHost(home, state, tmp_path / "sclibridge.log", _free_port(), env, bin_dirs)
+
+    async def connect(self):
+        if self.host_key is None:
+            self.host_key = "ssh-ed25519 AAAAtest"
+        return LocalConn(env)
+
+    with (
+        patch("custom_components.savant.installer.Installer.connect", connect),
+        patch("custom_components.savant.installer.BIN_DIR", bin_dirs[VERSION]),
+        patch("custom_components.savant.installer.LISTEN_ADDR", "127.0.0.1"),
+        patch("custom_components.savant.hub.MAX_BACKOFF", 2),
+    ):
+        yield host
+    host.kill_agent()
+
+
+async def wait_for(hass, check: Callable[[], bool], timeout: float = 20) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        await hass.async_block_till_done()
+        try:
+            if check():
+                return
+        except AttributeError:
+            pass
+        await asyncio.sleep(0.2)
+    raise AssertionError("condition not met in time")

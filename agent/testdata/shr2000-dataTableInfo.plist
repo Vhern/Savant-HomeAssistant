@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Door Lock</key>
+	<dict>
+		<key>Door Lock</key>
+		<array>
+			<dict>
+				<key>Controller</key>
+				<string>Door Lock Controller</string>
+				<key>Controller Zone</key>
+				<string>Room 1</string>
+				<key>DoorLockAddress</key>
+				<string>1</string>
+				<key>DoorLockAddress2</key>
+				<string></string>
+				<key>Enabled</key>
+				<string>YES</string>
+				<key>Entity</key>
+				<string>Lock</string>
+				<key>Identifier</key>
+				<string>0</string>
+				<key>Label</key>
+				<string></string>
+				<key>LightsAreOn</key>
+				<true/>
+				<key>Logical Component</key>
+				<string>Door_lock</string>
+				<key>Order</key>
+				<integer>0</integer>
+				<key>RoomLightsControl</key>
+				<string>Active</string>
+				<key>Savant Zone</key>
+				<dict>
+					<key>Room 1</key>
+					<true/>
+				</dict>
+				<key>SecurityCamera</key>
+				<string></string>
+				<key>ServiceID</key>
+				<string>SVC_ENV_DOORLOCK</string>
+				<key>State1</key>
+				<dict>
+					<key>RPMStateName</key>
+					<string>Door Lock Controller.Door_lock.DoorLockStatus_1</string>
+					<key>RPMStateType</key>
+					<string>RPMComponentBasedStateName</string>
+					<key>component</key>
+					<string>Door Lock Controller</string>
+					<key>identifiers</key>
+					<array>
+						<dict>
+							<key>description</key>
+							<string></string>
+							<key>name</key>
+							<string>DoorLockAddress</string>
+							<key>value</key>
+							<string>1</string>
+						</dict>
+					</array>
+					<key>logicalComponent</key>
+					<string>Door_lock</string>
+					<key>stateName</key>
+					<string>DoorLockStatus</string>
+				</dict>
+				<key>State2</key>
+				<dict/>
+				<key>SupportsErrors</key>
+				<false/>
+				<key>SupportsStatus</key>
+				<true/>
+				<key>UI Type</key>
+				<string>Push</string>
+				<key>UMF</key>
+				<dict>
+					<key>Controller Zone</key>
+					<true/>
+					<key>DoorLockAddress</key>
+					<true/>
+					<key>Entity</key>
+					<true/>
+				</dict>
+				<key>WholeHouseLightsControl</key>
+				<string>No</string>
+				<key>hasCompiled</key>
+				<true/>
+				<key>shouldDefaultRow</key>
+				<true/>
+			</dict>
+		</array>
+		<key>Savant App Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array>
+				<dict>
+					<key>Enabled</key>
+					<true/>
+					<key>Zone</key>
+					<string>Room 1</string>
+				</dict>
+			</array>
+		</dict>
+		<key>Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array>
+				<dict>
+					<key>Enabled</key>
+					<true/>
+					<key>Zone</key>
+					<string>Room 1</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>Fan</key>
+	<dict>
+		<key>Fan</key>
+		<array/>
+		<key>Savant App Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+		<key>Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+	</dict>
+	<key>Garage Door</key>
+	<dict>
+		<key>Garage Door</key>
+		<array/>
+		<key>Savant App Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+		<key>Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+	</dict>
+	<key>HVAC</key>
+	<dict>
+		<key>HVAC</key>
+		<array/>
+		<key>Savant App Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+		<key>Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+	</dict>
+	<key>Lighting</key>
+	<dict>
+		<key>Lighting</key>
+		<array/>
+		<key>Savant App Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+		<key>Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+	</dict>
+	<key>Pool &amp; Spa</key>
+	<dict>
+		<key>Pool &amp; Spa</key>
+		<array/>
+		<key>Savant App Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+		<key>Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+	</dict>
+	<key>Security System</key>
+	<dict>
+		<key>Savant App Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+		<key>Security System</key>
+		<array/>
+		<key>Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+	</dict>
+	<key>Shade</key>
+	<dict>
+		<key>Savant App Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+		<key>Shade</key>
+		<array/>
+		<key>Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+	</dict>
+	<key>Swipe Lighting</key>
+	<dict>
+		<key>Swipe Lighting</key>
+		<array/>
+		<key>Zone Map</key>
+		<dict>
+			<key>Room 1</key>
+			<array/>
+		</dict>
+	</dict>
+	<key>Version</key>
+	<integer>1</integer>
+</dict>
+</plist>

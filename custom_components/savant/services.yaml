@@ -1,0 +1,38 @@
+service_request:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: savant
+    zone:
+      required: true
+      example: Living Room
+      selector:
+        text:
+    component:
+      required: true
+      example: Apple TV
+      selector:
+        text:
+    logical_component:
+      example: Media_server
+      selector:
+        text:
+    variant:
+      default: "1"
+      selector:
+        text:
+    service_type:
+      required: true
+      example: SVC_AV_APPLEREMOTEMEDIASERVER
+      selector:
+        text:
+    request:
+      required: true
+      example: PowerOn
+      selector:
+        text:
+    arguments:
+      example: '{"VolumeValue": "20"}'
+      selector:
+        object:

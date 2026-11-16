@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+      - name: Tag must match manifest.json
+        run: |
+          v=$(python3 -c "import json;print(json.load(open('custom_components/savant/manifest.json'))['version'])")
+          tag="${{ github.event.release.tag_name }}"
+          [ "$tag" = "v$v" ] || [ "$tag" = "$v" ] || { echo "tag $tag does not match manifest version $v"; exit 1; }
+      - run: make zip
+      - run: gh release upload "${{ github.event.release.tag_name }}" dist/savant.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

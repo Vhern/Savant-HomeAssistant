@@ -1,0 +1,5 @@
+custom_components/savant/bin/
+dist/
+__pycache__/
+.pytest_cache/
+.venv/

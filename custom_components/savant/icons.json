@@ -1,0 +1,11 @@
+{
+  "entity": {
+    "button": {
+      "restart_agent": { "default": "mdi:restart" },
+      "rediscover": { "default": "mdi:magnify-scan" }
+    }
+  },
+  "services": {
+    "service_request": { "service": "mdi:remote" }
+  }
+}

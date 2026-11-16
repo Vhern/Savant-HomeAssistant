@@ -1,0 +1,112 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect a Savant host",
+        "description": "Home Assistant logs in over SSH once to install its agent and an SSH key. Your password isn't saved.",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password",
+          "ssh_port": "SSH port"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the Savant host.",
+          "username": "The login on the Savant host, usually RPM."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Log in to the Savant host again",
+        "description": "Home Assistant can't log in to {host} as {username} anymore, so it can't update or repair its agent. Enter the password to set up a new key.",
+        "data": {
+          "password": "Password"
+        }
+      },
+      "reconfigure": {
+        "title": "Change the Savant host connection",
+        "description": "Change the host address or login. The agent and key get installed again.",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password",
+          "ssh_port": "SSH port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Couldn't reach the host over SSH.",
+      "invalid_auth": "The host rejected the username or password.",
+      "unsupported_host": "This host's operating system or processor isn't supported.",
+      "install_failed": "Installing the agent on the host failed. Check the Home Assistant logs for details.",
+      "agent_unreachable": "The agent was installed, but Home Assistant can't reach it. Make sure port 8765 on the host is open.",
+      "unknown": "Something unexpected went wrong. Check the Home Assistant logs for details."
+    },
+    "abort": {
+      "already_configured": "This Savant host is already set up.",
+      "reauth_successful": "Logged in again and the agent is running.",
+      "reconfigure_successful": "Connection updated.",
+      "unique_id_mismatch": "That's a different Savant host."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "connection": {
+        "name": "Connection"
+      }
+    },
+    "button": {
+      "restart_agent": {
+        "name": "Restart agent"
+      },
+      "rediscover": {
+        "name": "Rediscover devices"
+      }
+    }
+  },
+  "issues": {
+    "unreachable": {
+      "title": "Can't reach the Savant host at {host}",
+      "description": "Home Assistant can't reach the Savant agent on {host} and couldn't fix it over SSH. Check that the host is on and connected to the network. Home Assistant keeps trying in the background."
+    }
+  },
+  "services": {
+    "service_request": {
+      "name": "Send service request",
+      "description": "Send any Savant service request, like a step in a Blueprint workflow.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Savant host",
+          "description": "The host to send it to. Uses the first one if left empty."
+        },
+        "zone": {
+          "name": "Zone",
+          "description": "The Savant zone, for example Living Room."
+        },
+        "component": {
+          "name": "Component",
+          "description": "The source component, for example Apple TV."
+        },
+        "logical_component": {
+          "name": "Logical component",
+          "description": "The logical component, for example Media_server. Some services leave it empty."
+        },
+        "variant": {
+          "name": "Variant",
+          "description": "The service variant ID."
+        },
+        "service_type": {
+          "name": "Service type",
+          "description": "The Savant service type, for example SVC_AV_TV."
+        },
+        "request": {
+          "name": "Request",
+          "description": "The request name, for example PowerOn."
+        },
+        "arguments": {
+          "name": "Arguments",
+          "description": "Arguments for the request, as name and value pairs."
+        }
+      }
+    }
+  }
+}
