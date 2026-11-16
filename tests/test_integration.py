@@ -206,13 +206,19 @@ async def test_app_scenes(hass: HomeAssistant, savant_host) -> None:
     await hass.services.async_call("scene", "turn_on", {"entity_id": "scene.vhern_s_bath_time"}, blocking=True)
     assert f"activateScene Bath Time {BATH_TIME} admin" in savant_host.log()
 
-    db = savant_host.home / "Library/Application Support/RacePointMedia/statusfiles/dis/dashboard.sqlite"
-    if not db.exists():
-        db = savant_host.home / "GNUstep/Library/ApplicationSupport/RacePointMedia/statusfiles/dis/dashboard.sqlite"
-    subprocess.run(
-        ["sqlite3", str(db), "INSERT INTO Scenes (identifier, name, isGlobal) VALUES ('NEW-SCENE-1', 'Good Night', 1);"],
-        check=True,
-    )
+    # The agent reads the Mac path on macOS and the GNUstep path on Linux.
+    for rel in (
+        "Library/Application Support/RacePointMedia",
+        "GNUstep/Library/ApplicationSupport/RacePointMedia",
+    ):
+        subprocess.run(
+            [
+                "sqlite3",
+                str(savant_host.home / rel / "statusfiles/dis/dashboard.sqlite"),
+                "INSERT INTO Scenes (identifier, name, isGlobal) VALUES ('NEW-SCENE-1', 'Good Night', 1);",
+            ],
+            check=True,
+        )
     await wait_for(hass, lambda: hass.states.get("scene.vhern_s_good_night") is not None, timeout=30)
 
 
