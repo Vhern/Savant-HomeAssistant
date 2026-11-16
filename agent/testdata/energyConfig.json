@@ -1,0 +1,11 @@
+{
+  "name": "Test Host",
+  "energyConfig": {
+    "circuits": [
+      {"id": "C1", "roomID": "R1", "classification": "Consumption", "groupName": "Lighting", "name": "Pendants 1"},
+      {"id": "C2", "roomID": "R2", "classification": "Production", "groupName": "Solar", "name": "Roof Array"}
+    ]
+  },
+  "rooms": [{"roomID": "R1", "type": "user", "name": "Den"}, {"roomID": "R2", "type": "user", "name": "Garage"}],
+  "localUsers": [{"name": "someone", "password": "bm90IHJlYWw="}]
+}

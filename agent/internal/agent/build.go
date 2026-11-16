@@ -34,11 +34,15 @@ type Inventory struct {
 	Sclibridge string                         `json:"sclibridge"`
 	ConfigDir  string                         `json:"config_dir"`
 	SceneDB    string                         `json:"scene_db,omitempty"`
+	AppDB      string                         `json:"app_db,omitempty"`
 	Zones      []string                       `json:"zones"`
 	Services   map[string][]transport.Service `json:"services"`
 	Scenes     []transport.Scene              `json:"scenes"`
 	AppScenes  []transport.Scene              `json:"-"`
 	Rows       []savantcfg.Row                `json:"-"`
+	App        *savantcfg.AppDB               `json:"-"`
+	Circuits   []savantcfg.Circuit            `json:"circuits,omitempty"`
+	Known      map[string]bool                `json:"-"`
 	Defs       *savantcfg.Services            `json:"-"`
 	Manifest   savantcfg.Manifest             `json:"-"`
 	StateNames []string                       `json:"state_names,omitempty"`
@@ -81,10 +85,25 @@ func Collect(ctx context.Context, tr transport.Transport, cfg config.Config, ver
 		inv.warn(log, "Blueprint config not found (%v); lights, shades and locks need it", err)
 	} else {
 		inv.ConfigDir = dir
-		if defs, err := savantcfg.ReadServices(filepath.Join(dir, "serviceImplementation.xml")); err != nil {
-			inv.warn(log, "serviceImplementation.xml: %v", err)
-		} else {
+		app, appErr := savantcfg.ReadAppDB(ctx, savantcfg.AppDBPath(dir))
+		if appErr != nil && !errors.Is(appErr, fs.ErrNotExist) {
+			inv.warn(log, "serviceImplementation.sqlite: %v", appErr)
+		}
+		if app != nil {
+			inv.App, inv.AppDB = app, app.Path
+		}
+		defs, err := savantcfg.ReadServices(filepath.Join(dir, "serviceImplementation.xml"))
+		switch {
+		case err == nil:
 			inv.Defs = defs
+			if app != nil {
+				mergeAppDefs(defs, app.Services)
+			}
+		case app != nil && app.Services != nil && len(app.Services.List) > 0:
+			// Savant 12 Mac hosts keep the XML readable by _savant only.
+			inv.Defs = app.Services
+		default:
+			inv.warn(log, "serviceImplementation.xml: %v", err)
 		}
 		if rows, err := savantcfg.ReadDataTables(filepath.Join(dir, "dataTableInfo.plist")); err != nil {
 			inv.warn(log, "dataTableInfo.plist: %v", err)
@@ -96,16 +115,47 @@ func Collect(ctx context.Context, tr transport.Transport, cfg config.Config, ver
 		} else {
 			inv.Manifest = m
 		}
+		if c, err := savantcfg.ReadEnergy(savantcfg.EnergyConfigPath(dir)); err == nil {
+			inv.Circuits = c
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			inv.warn(log, "energyConfig.json: %v", err)
+		}
+	}
+	// State names tell which sources report what's playing.
+	if names, err := tr.StateNames(ctx, ""); err != nil {
+		inv.warn(log, "statenames: %v", err)
+	} else {
+		inv.Known = make(map[string]bool, len(names))
+		for _, n := range names {
+			inv.Known[n] = true
+		}
+		if withStateNames {
+			inv.StateNames = names
+		}
 	}
 
 	inv.Scenes = collectScenes(ctx, tr, inv, log)
 	inv.Host = collectHost(ctx, tr, inv, version)
-	if withStateNames {
-		if inv.StateNames, err = tr.StateNames(ctx, ""); err != nil {
-			inv.warn(log, "statenames: %v", err)
+	return inv, nil
+}
+
+// mergeAppDefs copies what only the app database knows onto the XML's
+// services, and adds the services the XML doesn't have.
+func mergeAppDefs(defs, app *savantcfg.Services) {
+	if app == nil {
+		return
+	}
+	for _, a := range app.List {
+		d := defs.Find(a.Zone, a.Component, a.LogicalComponent, a.Type, a.Variant)
+		if d == nil {
+			defs.List = append(defs.List, a)
+			continue
+		}
+		d.Custom = a.Custom
+		if d.AppName == "" {
+			d.AppName = a.AppName
 		}
 	}
-	return inv, nil
 }
 
 func collectScenes(ctx context.Context, tr transport.Transport, inv *Inventory, log *slog.Logger) []transport.Scene {
@@ -212,6 +262,7 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 		out = append(out, e)
 	}
 
+	fromApp := buildAppEntities(inv, add)
 	for _, r := range inv.Rows {
 		what := fmt.Sprintf("%s row %d %q", r.Table, r.Index, r.Name())
 		if !r.Enabled {
@@ -223,12 +274,16 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 			skipped = append(skipped, Skipped{what, "table not supported yet"})
 			continue
 		}
+		if fromApp[platform] {
+			continue
+		}
 		tgt := resolveTarget(inv, r)
 		meta := Meta{
 			ID:       platform + "." + objectID(r),
 			Platform: platform,
 			Name:     r.Name(),
 			Zone:     r.Zone(),
+			Device:   roomDevice(r.Zone(), platformDevice[platform]),
 			Source:   what + " -> " + tgt.Service.String(),
 		}
 		switch platform {
@@ -238,9 +293,20 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 			add(&Light{Meta: meta, Target: tgt, Dimmable: dim,
 				LevelState: pickState(r, "DimmerLevel", "CurrentDimmerLevel", "LightLevel", "IsLightOn", "LightIsOn")})
 		case "cover":
-			lvl := pickState(r, "ShadeLevel", "CurrentShadeLevel", "ShadeLevelMoving", "ShadePosition")
-			meta.Attributes = map[string]any{"position": lvl != "", "stop": tgt.Has("ShadeStop", true)}
-			add(&Shade{Meta: meta, Target: tgt, LevelState: lvl})
+			sh := &Shade{Target: tgt, Setter: "ShadeSet",
+				LevelState: pickState(r, "ShadeLevel", "CurrentShadeLevel", "ShadeLevelMoving", "ShadePosition")}
+			if tgt.Has("ShadeUp", false) {
+				sh.Up = "ShadeUp"
+			}
+			if tgt.Has("ShadeDown", false) {
+				sh.Down = "ShadeDown"
+			}
+			if tgt.Has("ShadeStop", true) {
+				sh.Stop = "ShadeStop"
+			}
+			meta.Attributes = map[string]any{"position": sh.LevelState != "", "stop": sh.Stop != ""}
+			sh.Meta = meta
+			add(sh)
 		case "lock":
 			add(&Lock{Meta: meta, Target: tgt, StatusState: r.State("DoorLockStatus"), LockedState: r.State("IsDoorLocked")})
 		}
@@ -253,7 +319,11 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 		}
 		add(room)
 		for _, src := range room.Sources {
-			add(sourcePlayer(room, src))
+			player := sourcePlayer(room, src)
+			add(player)
+			if r := sourceRemote(player); r != nil {
+				add(r)
+			}
 		}
 	}
 
@@ -277,6 +347,9 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 		for _, s := range hostSensors(c) {
 			add(s)
 		}
+	}
+	for _, s := range energySensors(inv.Circuits) {
+		add(s)
 	}
 
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Info().ID < out[j].Info().ID })
@@ -354,38 +427,85 @@ func buildMediaRoom(inv *Inventory, zone string) *MediaRoom {
 	}
 	for _, src := range byName {
 		sortApps(src)
+		src.NowPlaying = nowPlaying(inv, src.Primary)
 	}
 	if len(byName) == 0 {
 		return nil
 	}
 	room := &MediaRoom{
-		Meta:        Meta{ID: "media_player." + config.Slug(zone), Platform: "media_player", Name: zone, Zone: zone, Source: "zone " + zone},
+		Meta: Meta{ID: "media_player." + config.Slug(zone), Platform: "media_player", Name: zone, Zone: zone,
+			Device: roomDevice(zone, "media"), Source: "zone " + zone},
 		Zone:        zone,
 		ActiveState: zone + ".ActiveService",
 		VolumeState: zone + ".CurrentVolume",
 		MuteState:   zone + ".IsMuted",
 	}
 	var names []string
-	var step, mute, set bool
-	for _, k := range sortedKeys(byName) {
-		src := byName[k]
-		room.Sources = append(room.Sources, src)
-		names = append(names, src.Name)
-		if d := src.Primary; d != nil {
-			step = step || d.HasRequest("VolumeUp")
-			mute = mute || d.HasRequest("MuteOn")
-			set = set || d.HasRequest("SetVolume")
-		}
-	}
 	class := "receiver"
 	if isTV {
 		class = "tv"
 	}
-	room.Attributes = map[string]any{
-		"kind": "room", "sources": names, "device_class": class,
-		"volume_step": step, "volume_mute": mute, "volume_set": set, "volume_max": 100,
+	attrs := map[string]any{"kind": "room", "device_class": class, "volume_max": 100, "use_device_name": true}
+	for _, k := range sortedKeys(byName) {
+		src := byName[k]
+		room.Sources = append(room.Sources, src)
+		names = append(names, src.Name)
+		for key, has := range playerFeatures(src.Primary) {
+			attrs[key] = has || attrs[key] == true
+		}
 	}
+	attrs["sources"] = names
+	room.Attributes = attrs
 	return room
+}
+
+func playerFeatures(d *savantcfg.ServiceDef) map[string]bool {
+	out := map[string]bool{}
+	if d == nil {
+		return out
+	}
+	out["volume_step"] = d.HasRequest("VolumeUp")
+	out["volume_mute"] = d.HasRequest("MuteOn")
+	out["volume_set"] = d.HasRequest("SetVolume")
+	for action, req := range transportRequests {
+		out[action] = d.HasRequest(req)
+	}
+	out["shuffle"] = d.HasRequest("ShuffleOn")
+	out["repeat"] = d.HasRequest("RepeatOn")
+	return out
+}
+
+func nowPlaying(inv *Inventory, d *savantcfg.ServiceDef) map[string]string {
+	if d == nil || len(inv.Known) == 0 {
+		return nil
+	}
+	prefix := d.Component + "." + d.LogicalComponent + "."
+	if !inv.Known[prefix+"CurrentSongName"] {
+		return nil
+	}
+	out := map[string]string{}
+	for k, st := range nowPlayingStates {
+		if inv.Known[prefix+st] {
+			out[k] = prefix + st
+		}
+	}
+	return out
+}
+
+// Dealer-added requests that aren't apps to open.
+var notShortcut = regexp.MustCompile(`(?i)restart|reboot|reset|power|pair|discover`)
+
+func sourceShortcuts(d *savantcfg.ServiceDef) []string {
+	if d == nil {
+		return nil
+	}
+	var out []string
+	for _, name := range sortedKeys(d.Custom) {
+		if d.Custom[name] && len(d.Requests[name]) == 0 && !notShortcut.MatchString(name) {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 var camelGap = regexp.MustCompile(`([a-z])([A-Z])`)
@@ -412,24 +532,21 @@ func sortApps(src *Source) {
 }
 
 func sourcePlayer(room *MediaRoom, src *Source) *SourcePlayer {
-	attrs := map[string]any{"kind": "source", "device_class": ""}
-	if len(src.Apps) > 0 {
-		var names []string
-		for _, a := range src.Apps {
-			names = append(names, a.Name)
-		}
+	attrs := map[string]any{"kind": "source", "device_class": "", "use_device_name": true}
+	src.Shortcuts = sourceShortcuts(src.Primary)
+	var names []string
+	for _, a := range src.Apps {
+		names = append(names, a.Name)
+	}
+	names = append(names, src.Shortcuts...)
+	if len(names) > 0 {
 		attrs["sources"] = names
 	}
 	if src.Service.Type == "SVC_AV_TV" {
 		attrs["device_class"] = "tv"
 	}
-	if d := src.Primary; d != nil {
-		attrs["volume_step"] = d.HasRequest("VolumeUp")
-		attrs["volume_mute"] = d.HasRequest("MuteOn")
-		attrs["volume_set"] = d.HasRequest("SetVolume")
-		for action, req := range transportRequests {
-			attrs[action] = d.HasRequest(req)
-		}
+	for key, has := range playerFeatures(src.Primary) {
+		attrs[key] = has
 	}
 	return &SourcePlayer{
 		Meta: Meta{
@@ -438,11 +555,42 @@ func sourcePlayer(room *MediaRoom, src *Source) *SourcePlayer {
 			Name:       src.Name,
 			Zone:       room.Zone,
 			Attributes: attrs,
+			Device:     sourceDevice(room.Zone, src),
 			Source:     "source " + src.Service.Dash(),
 		},
 		Room:   room,
 		Source: src,
 	}
+}
+
+func sourceDevice(zone string, src *Source) *Device {
+	return &Device{ID: "source_" + config.Slug(zone+"_"+src.Name), Name: src.Name, Model: "Savant source"}
+}
+
+// remoteCommands are the requests worth listing for a remote: no arguments
+// and nothing for power, pairing or Savant's own room requests.
+func remoteCommands(d *savantcfg.ServiceDef) []string {
+	var out []string
+	for _, name := range sortedKeys(d.Requests) {
+		if len(d.Requests[name]) > 0 || strings.HasPrefix(name, "__") || notShortcut.MatchString(name) ||
+			strings.Contains(name, "App") || strings.Contains(name, "Text") {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+func sourceRemote(p *SourcePlayer) *Remote {
+	d := p.Source.Primary
+	if d == nil || !(d.HasRequest("OSDCursorUp") || d.HasRequest("OSDSelect") || len(p.Source.Shortcuts) > 0) {
+		return nil
+	}
+	m := p.Meta
+	m.ID = "remote." + strings.TrimPrefix(p.ID, "media_player.")
+	m.Platform = "remote"
+	m.Attributes = map[string]any{"kind": "remote", "use_device_name": true, "commands": remoteCommands(d)}
+	return &Remote{Meta: m, Player: p}
 }
 
 // Prefer a source's main service over its app inputs, then the lowest variant.

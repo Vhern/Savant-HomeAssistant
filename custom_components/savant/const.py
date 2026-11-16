@@ -22,12 +22,15 @@ KEY_COMMENT = "home-assistant-savant"
 PLATFORMS = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.CAMERA,
     Platform.COVER,
     Platform.LIGHT,
     Platform.LOCK,
     Platform.MEDIA_PLAYER,
+    Platform.REMOTE,
     Platform.SCENE,
     Platform.SENSOR,
+    Platform.SWITCH,
 ]
 
 SERVICE_REQUEST = "service_request"

@@ -96,6 +96,7 @@ class SavantHub:
         )
         self.session = async_get_clientsession(hass)
         self.info: dict[str, Any] = {}
+        self.host_device_id: str | None = None
         self.entities: dict[str, dict[str, Any]] = {}
         self.states: dict[str, dict[str, Any] | None] = {}
         self.connected = False
@@ -128,15 +129,16 @@ class SavantHub:
             serial_number=self.info.get("uid"),
         )
 
-    def entity_device(self, sid: str, name: str, zone: str, model: str) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"{self.uid}_{sid}")},
-            name=name,
-            manufacturer="Savant",
-            model=model,
-            suggested_area=zone,
-            via_device=(DOMAIN, self.uid),
-        )
+    def device_identifier(self, key: str) -> tuple[str, str]:
+        return (DOMAIN, f"{self.uid}_{key}")
+
+    def entity_device(self, key: str, name: str, zone: str | None, model: str) -> DeviceInfo:
+        info = DeviceInfo(identifiers={self.device_identifier(key)}, name=name, manufacturer="Savant", model=model)
+        if self.host_device_id:
+            info["via_device_id"] = self.host_device_id
+        if zone:
+            info["suggested_area"] = zone
+        return info
 
     async def async_start(self) -> None:
         self._want = await self.hass.async_add_executor_job(bundled_version)

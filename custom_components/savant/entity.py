@@ -14,15 +14,6 @@ from .hub import SavantHub
 
 PENDING_TIMEOUT = 10
 
-MODELS = {
-    "light": "Savant lighting load",
-    "cover": "Savant shade",
-    "lock": "Savant door lock",
-    "room": "Savant room audio/video",
-    "source": "Savant source",
-}
-
-
 def metas(hub: SavantHub, platform: str) -> list[dict[str, Any]]:
     return [m for m in hub.entities.values() if m["platform"] == platform]
 
@@ -37,17 +28,16 @@ class SavantEntity(Entity):
         self.attrs: dict[str, Any] = meta.get("attributes") or {}
         zone = meta.get("zone")
         self._attr_unique_id = f"{hub.uid}_{self.sid}"
-        if zone:
-            platform = meta["platform"]
-            kind = self.attrs.get("kind", platform)
-            name = "Media" if kind == "room" else meta["name"]
-            self._attr_name = None
-            self._attr_device_info = hub.entity_device(self.sid, name, zone, MODELS.get(kind, "Savant"))
+        if device := meta.get("device"):
+            self._attr_name = None if self.attrs.get("use_device_name") else meta["name"]
+            self._attr_device_info = hub.entity_device(device["id"], device["name"], zone, device.get("model") or "Savant")
         else:
             self._attr_name = meta["name"]
             self._attr_device_info = hub.host_device()
         if self.attrs.get("entity_category") == "diagnostic":
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        if self.attrs.get("disabled"):
+            self._attr_entity_registry_enabled_default = False
         if icon := self.attrs.get("icon"):
             self._attr_icon = icon
         self.pending: dict[str, Any] | None = None

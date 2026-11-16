@@ -230,7 +230,8 @@ type ServiceDef struct {
 	LogicalComponent string
 	Variant          string
 	Alias            string
-	AppName          string // the app on the TV, from <internal name_on_component>
+	AppName          string          // the app on the TV, from <internal name_on_component>
+	Custom           map[string]bool // requests a dealer added, like app shortcuts on an Apple TV
 	Enabled          bool
 	Requests         map[string][]string
 }

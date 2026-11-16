@@ -196,6 +196,17 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
 
+    async def _replace_token(self, entry, errors: dict[str, str], **kwargs: Any):
+        """Provisions with a new token. The running hub is stopped first so it
+        doesn't put the old token back while repairing the connection."""
+        loaded = entry.state is ConfigEntryState.LOADED
+        if loaded:
+            await entry.runtime_data.async_stop()
+        res = await self._try(errors, agent_port=entry.data[CONF_AGENT_PORT], **kwargs)
+        if res is None and loaded:
+            self.hass.config_entries.async_schedule_reload(entry.entry_id)
+        return res
+
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
         return await self.async_step_reauth_confirm()
 
@@ -203,14 +214,13 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reauth_entry()
         errors: dict[str, str] = {}
         if user_input is not None:
-            res = await self._try(
+            res = await self._replace_token(
+                entry,
                 errors,
                 host=entry.data[CONF_HOST],
                 port=entry.data[CONF_SSH_PORT],
                 username=entry.data[CONF_USERNAME],
                 password=user_input[CONF_PASSWORD],
-                token=entry.data[CONF_TOKEN],
-                agent_port=entry.data[CONF_AGENT_PORT],
             )
             if res:
                 data, info = res
@@ -232,14 +242,13 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
         if user_input is not None:
-            res = await self._try(
+            res = await self._replace_token(
+                entry,
                 errors,
                 host=user_input[CONF_HOST],
                 port=user_input[CONF_SSH_PORT],
                 username=user_input[CONF_USERNAME],
                 password=user_input[CONF_PASSWORD],
-                token=entry.data[CONF_TOKEN],
-                agent_port=entry.data[CONF_AGENT_PORT],
             )
             if res:
                 data, info = res

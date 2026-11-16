@@ -6,20 +6,26 @@ You add it with the Savant host's IP address, user and password. Home Assistant 
 
 ## Features
 
-- Lights, including DMX loads, with brightness and fade time
-- Shades with open, close, stop and position
+- Lights with brightness and fade time. RGB DMX loads get color, and tunable white loads get color temperature
+- Lighting scenes from Blueprint as switches, and keypad buttons as buttons (unnamed or repeated ones start disabled)
+- Shades with open, close, stop and position, including shade groups
 - Door locks
-- A media player for each room, and one for each source in it (a PS5, a TV), with on/off, source, volume and mute
-- The apps a TV has in Blueprint (Netflix, Hulu, YouTube...) as that TV's source list, with the running app shown on the room
+- A media player for each room, and one for each source in it (a PS5, a TV, Savant Music), with on/off, source, volume, mute and playback controls
+- What's playing on music servers that report it (Savant Music, Sonos): title, artist, artwork, shuffle and repeat
+- The apps a TV has in Blueprint, and the app shortcuts on an Apple TV, as that source's list
+- A remote for each source with on-screen controls, for d-pad cards and automations (`up`, `select`, `menu` or any request name)
+- Cameras set up in Blueprint, with snapshots and the live stream
+- Energy: whole-home power, today's usage, and power per group and circuit
 - Savant scenes, including the ones you make in the Savant app
 - Host CPU, memory, disk and uptime sensors
+- Entities grouped into devices per room: Lighting, Shades, Keypads, Locks, Media, plus one device per source and camera
 - A `savant.service_request` action for anything else, using the same service requests as Blueprint
 
-Each Savant room shows up as an area, and each light, shade, lock and room media player is its own device under the Savant host. The host pushes changes, so Home Assistant updates about a second after something changes in Savant.
+Each Savant room shows up as an area with a few devices in it (Lighting, Shades, Keypads, Media) under the Savant host. The host pushes changes, so Home Assistant updates about a second after something changes in Savant.
 
 ## Requirements
 
-- A Savant host you can reach over SSH. Tested on an SHR-2000. Pro Mac hosts should work but haven't been tested yet.
+- A Savant host you can reach over SSH. Tested on an SHR-2000 and a Pro Mac host on Savant 12.
 - The host's SSH login, usually `RPM`.
 - Port 8765 on the host reachable from Home Assistant.
 
@@ -80,5 +86,5 @@ You can also run the agent by hand on a host:
 ## Known limitations
 
 - No climate (HVAC) support yet.
-- No now-playing info yet.
 - A room's volume level only shows if the room reports it. Volume up/down and mute work either way.
+- Camera snapshots and streams come straight from each camera, so Home Assistant needs to reach the cameras' network.

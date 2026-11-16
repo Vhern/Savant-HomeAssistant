@@ -45,15 +45,15 @@ async def test_installs_agent_and_builds_entities(hass: HomeAssistant, savant_ho
     assert hass.states.get("media_player.room_1_hd_tv").attributes["device_class"] == "tv"
     assert media.attributes["source_list"] == ["HD TV", "HD TV 2", "PS5"]
     assert media.attributes["device_class"] == "tv"
-    assert hass.states.get("lock.room_1_lock").state == "unlocked"
+    assert hass.states.get("lock.room_1_locks_lock").state == "unlocked"
     assert hass.states.get("scene.vhern_s_movie_time") is not None
     assert hass.states.get("sensor.vhern_s_cpu_usage").state == "5.4"
     assert hass.states.get("binary_sensor.vhern_s_connection").state == "on"
 
     devices = dr.async_get(hass)
     hub_dev = devices.async_get_device_by_identifier((DOMAIN, HOST_UID), entry.entry_id)
-    for sid, name in (("media_player.room_1", "Media"), ("lock.door_lock_controller_1", "Lock")):
-        dev = devices.async_get_device_by_identifier((DOMAIN, f"{HOST_UID}_{sid}"), entry.entry_id)
+    for key, name in (("media_room_1", "Media"), ("locks_room_1", "Locks"), ("source_room_1_ps5", "PS5")):
+        dev = devices.async_get_device_by_identifier((DOMAIN, f"{HOST_UID}_{key}"), entry.entry_id)
         assert dev.name == name and dev.suggested_area == "Room 1" and dev.via_device_id == hub_dev.id
         assert dev.area_id == "room_1"
     assert hub_dev.name == "Vhern's" and hub_dev.sw_version == "9.4.6:696" and hub_dev.model == "Smart Host"
@@ -79,8 +79,8 @@ async def test_commands_and_live_state(hass: HomeAssistant, savant_host) -> None
     await hass.services.async_call("media_player", "turn_off", {"entity_id": "media_player.room_1_media"}, blocking=True)
     await wait_for(hass, lambda: hass.states.get("media_player.room_1_media").state == "off")
 
-    await hass.services.async_call("lock", "lock", {"entity_id": "lock.room_1_lock"}, blocking=True)
-    await wait_for(hass, lambda: hass.states.get("lock.room_1_lock").state == "locked")
+    await hass.services.async_call("lock", "lock", {"entity_id": "lock.room_1_locks_lock"}, blocking=True)
+    await wait_for(hass, lambda: hass.states.get("lock.room_1_locks_lock").state == "locked")
     assert "servicerequest Room 1 Door Lock Controller Door_lock 1 SVC_ENV_DOORLOCK LockDoorLock DoorLockAddress 1" in savant_host.log()
 
     await hass.services.async_call("scene", "turn_on", {"entity_id": "scene.vhern_s_movie_time"}, blocking=True)
@@ -180,10 +180,10 @@ async def test_taps_respond_before_savant_confirms(hass: HomeAssistant, savant_h
     await setup(hass, savant_host)
 
     start = time.monotonic()
-    await hass.services.async_call("lock", "lock", {"entity_id": "lock.room_1_lock"}, blocking=True)
+    await hass.services.async_call("lock", "lock", {"entity_id": "lock.room_1_locks_lock"}, blocking=True)
     assert time.monotonic() - start < 1.5
-    assert hass.states.get("lock.room_1_lock").state == "locking"
-    await wait_for(hass, lambda: hass.states.get("lock.room_1_lock").state == "locked")
+    assert hass.states.get("lock.room_1_locks_lock").state == "locking"
+    await wait_for(hass, lambda: hass.states.get("lock.room_1_locks_lock").state == "locked")
 
     await hass.services.async_call(
         "media_player", "select_source", {"entity_id": "media_player.room_1_media", "source": "PS5"}, blocking=True

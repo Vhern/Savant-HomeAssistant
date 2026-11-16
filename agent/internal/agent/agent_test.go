@@ -174,7 +174,7 @@ func TestBuild(t *testing.T) {
 		ids = append(ids, e.Info().ID)
 	}
 	want := "cover.vhern_s_01_002 light.vhern_s_001 lock.door_lock_controller_1 media_player.room_1 " +
-		"media_player.room_1_hd_tv media_player.room_1_hd_tv_2 media_player.room_1_ps5 scene.cced55fe_a9e1 " +
+		"media_player.room_1_hd_tv media_player.room_1_hd_tv_2 media_player.room_1_ps5 remote.room_1_hd_tv remote.room_1_hd_tv_2 scene.cced55fe_a9e1 " +
 		"sensor.host_cpu sensor.host_disk_free sensor.host_memory sensor.host_software sensor.host_uptime"
 	if got := strings.Join(ids, " "); got != want {
 		t.Errorf("ids:\n got %s\nwant %s\nskipped %v", got, want, skipped)

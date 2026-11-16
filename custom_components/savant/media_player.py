@@ -7,6 +7,7 @@ from homeassistant.components.media_player import (
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
+    RepeatMode,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -22,6 +23,10 @@ OPTIONAL_FEATURES = {
     "play": F.PLAY,
     "pause": F.PAUSE,
     "stop": F.STOP,
+    "next": F.NEXT_TRACK,
+    "previous": F.PREVIOUS_TRACK,
+    "shuffle": F.SHUFFLE_SET,
+    "repeat": F.REPEAT_SET,
 }
 
 
@@ -52,8 +57,40 @@ class SavantPlayer(SavantEntity, MediaPlayerEntity):
 
     @property
     def state(self) -> MediaPlayerState | None:
-        on = self.data.get("on")
-        return None if on is None else (MediaPlayerState.ON if on else MediaPlayerState.OFF)
+        data = self.data
+        on = data.get("on")
+        if on is None:
+            return None
+        if not on:
+            return MediaPlayerState.OFF
+        if "paused" in data and (data.get("title") or data.get("artist")):
+            return MediaPlayerState.PAUSED if data["paused"] else MediaPlayerState.PLAYING
+        return MediaPlayerState.ON
+
+    @property
+    def media_title(self) -> str | None:
+        return self.data.get("title")
+
+    @property
+    def media_artist(self) -> str | None:
+        return self.data.get("artist")
+
+    @property
+    def media_album_name(self) -> str | None:
+        return self.data.get("album")
+
+    @property
+    def media_image_url(self) -> str | None:
+        return self.data.get("artwork")
+
+    @property
+    def shuffle(self) -> bool | None:
+        return self.data.get("shuffle")
+
+    @property
+    def repeat(self) -> RepeatMode | None:
+        mode = self.data.get("repeat")
+        return RepeatMode(mode) if mode in ("off", "all", "one") else None
 
     async def async_turn_on(self) -> None:
         await self.command("turn_on", {"on": True})
@@ -81,6 +118,18 @@ class SavantPlayer(SavantEntity, MediaPlayerEntity):
 
     async def async_media_stop(self) -> None:
         await self.command("stop")
+
+    async def async_media_next_track(self) -> None:
+        await self.command("next")
+
+    async def async_media_previous_track(self) -> None:
+        await self.command("previous")
+
+    async def async_set_shuffle(self, shuffle: bool) -> None:
+        await self.command("shuffle", {"shuffle": shuffle}, shuffle=shuffle)
+
+    async def async_set_repeat(self, repeat: RepeatMode) -> None:
+        await self.command("repeat", {"repeat": repeat.value}, repeat=repeat.value)
 
 
 class SavantRoom(SavantPlayer):

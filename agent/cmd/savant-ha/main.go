@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -148,7 +149,11 @@ func discover(ctx context.Context, cfg config.Config, tr transport.Transport, wi
 	}
 	var items []item
 	for _, e := range ents {
-		items = append(items, item{e.Info(), e.State(vals)})
+		m := *e.Info()
+		if len(m.Secret) > 0 {
+			m.Secret = map[string]string{"hidden": strings.Join(sortedKeys(m.Secret), ",")}
+		}
+		items = append(items, item{&m, e.State(vals)})
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -223,4 +228,13 @@ func newLogger(level string) *slog.Logger {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "savant-ha:", err)
 	os.Exit(1)
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

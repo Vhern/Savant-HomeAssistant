@@ -27,7 +27,18 @@ type Meta struct {
 	Name       string         `json:"name"`
 	Zone       string         `json:"zone,omitempty"`
 	Attributes map[string]any `json:"attributes,omitempty"`
+	Device     *Device        `json:"device,omitempty"`
 	Source     string         `json:"source,omitempty"`
+	// Secret holds things like camera logins; diagnostics and discover hide it.
+	Secret map[string]string `json:"secret,omitempty"`
+}
+
+// Device is how entities are grouped in Home Assistant: one device per room
+// and kind (Lighting, Shades, Keypads, Media) and one per A/V source.
+type Device struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Model string `json:"model"`
 }
 
 func (m *Meta) Info() *Meta { return m }
@@ -118,12 +129,16 @@ type Light struct {
 	Target
 	LevelState string
 	Dimmable   bool
+	// DMX loads report their color as "R,G,B,W,..|kelvin,..|mode" in ColorState.
+	ColorState           string
+	RGB                  bool
+	MinKelvin, MaxKelvin int
 
 	mu        sync.Mutex
 	lastLevel float64
 }
 
-func (l *Light) States() []string { return nonEmpty(l.LevelState) }
+func (l *Light) States() []string { return nonEmpty(l.LevelState, l.ColorState) }
 
 func (l *Light) State(v Values) map[string]any {
 	raw, ok := v[l.LevelState]
@@ -149,7 +164,51 @@ func (l *Light) State(v Values) map[string]any {
 	if l.Dimmable {
 		st["brightness"] = pct(level)
 	}
+	if c, ok := parseColor(v[l.ColorState]); ok && l.ColorState != "" {
+		tunable := l.MaxKelvin > 0 && c.Kelvin > 0
+		if l.RGB {
+			st["rgbw"] = c.RGBW[:]
+			st["color_mode"] = "rgbw"
+		}
+		if tunable {
+			st["kelvin"] = c.Kelvin
+			if !l.RGB || strings.EqualFold(c.Mode, "Tunable White") {
+				st["color_mode"] = "color_temp"
+			}
+		}
+	}
 	return st
+}
+
+type lightColor struct {
+	RGBW   [4]int
+	Kelvin int
+	Mode   string
+}
+
+// parseColor reads CurrentColor_*, like "255,000,000,000,100,100|3000,000,100|Infinite Color".
+func parseColor(raw string) (lightColor, bool) {
+	var c lightColor
+	parts := strings.Split(strings.TrimSpace(raw), "|")
+	rgb := strings.Split(parts[0], ",")
+	if len(rgb) < 4 {
+		return c, false
+	}
+	for i := range 4 {
+		n, err := strconv.Atoi(strings.TrimSpace(rgb[i]))
+		if err != nil {
+			return c, false
+		}
+		c.RGBW[i] = max(0, min(255, n))
+	}
+	if len(parts) > 1 {
+		k, _ := strconv.Atoi(strings.TrimSpace(strings.Split(parts[1], ",")[0]))
+		c.Kelvin = k
+	}
+	if len(parts) > 2 {
+		c.Mode = strings.TrimSpace(parts[2])
+	}
+	return c, true
 }
 
 func (l *Light) Do(ctx context.Context, x Executor, action string, p Params) error {
@@ -182,13 +241,82 @@ func (l *Light) dimmerSet(level float64, p Params) transport.Request {
 	if t, ok := p.Float("transition"); ok && t > 0 {
 		extra["FadeTime"] = strconv.FormatFloat(t, 'f', -1, 64)
 	}
+	if rgbw, ok := p["rgbw"].([]any); ok && len(rgbw) == 4 && l.RGB {
+		for i, k := range []string{"bleColorRed", "bleColorGreen", "bleColorBlue", "bleColorWhite"} {
+			f, _ := Params{"v": rgbw[i]}.Float("v")
+			extra[k] = strconv.Itoa(int(math.Round(math.Max(0, math.Min(255, f)))))
+		}
+	}
+	if k, ok := p.Float("kelvin"); ok && l.MaxKelvin > 0 {
+		extra["kelvin"] = strconv.Itoa(int(math.Round(math.Max(float64(l.MinKelvin), math.Min(float64(l.MaxKelvin), k)))))
+	}
 	return l.Request("DimmerSet", extra)
 }
 
+// LightScene is a Blueprint lighting scene, which can be turned on and off.
+type LightScene struct {
+	Meta
+	Target
+	StateName string
+	On, Off   string
+}
+
+func (s *LightScene) States() []string { return nonEmpty(s.StateName) }
+
+func (s *LightScene) State(v Values) map[string]any {
+	on, ok := transport.ParseBool(v[s.StateName])
+	if !ok {
+		return nil
+	}
+	return map[string]any{"on": on}
+}
+
+func (s *LightScene) Do(ctx context.Context, x Executor, action string, _ Params) error {
+	switch {
+	case action == "turn_on":
+		return x.ServiceRequest(ctx, s.Request(s.On, nil))
+	case action == "turn_off" && s.Off != "":
+		return x.ServiceRequest(ctx, s.Request(s.Off, nil))
+	}
+	return errAction(&s.Meta, action)
+}
+
+type KeypadButton struct {
+	Meta
+	Target
+	LEDState       string
+	Press, Release string
+}
+
+func (b *KeypadButton) States() []string { return nonEmpty(b.LEDState) }
+
+func (b *KeypadButton) State(v Values) map[string]any {
+	if led, ok := transport.ParseBool(v[b.LEDState]); ok {
+		return map[string]any{"led": led}
+	}
+	return map[string]any{}
+}
+
+func (b *KeypadButton) Do(ctx context.Context, x Executor, action string, _ Params) error {
+	if action != "press" {
+		return errAction(&b.Meta, action)
+	}
+	if err := x.ServiceRequest(ctx, b.Request(b.Press, nil)); err != nil {
+		return err
+	}
+	if b.Release != "" && b.Release != b.Press {
+		return x.ServiceRequest(ctx, b.Request(b.Release, nil))
+	}
+	return nil
+}
+
+// Shade requests come from Blueprint: a shade group uses GroupShadeUp,
+// GroupShadeStop and GroupShadeSet instead of ShadeUp, ShadeStop and ShadeSet.
 type Shade struct {
 	Meta
 	Target
-	LevelState string
+	LevelState             string
+	Up, Down, Stop, Setter string
 }
 
 func (s *Shade) States() []string { return nonEmpty(s.LevelState) }
@@ -207,17 +335,20 @@ func (s *Shade) State(v Values) map[string]any {
 func (s *Shade) Do(ctx context.Context, x Executor, action string, p Params) error {
 	switch action {
 	case "open":
-		if s.Has("ShadeUp", false) {
-			return x.ServiceRequest(ctx, s.Request("ShadeUp", nil))
+		if s.Up != "" {
+			return x.ServiceRequest(ctx, s.Request(s.Up, nil))
 		}
 		return x.ServiceRequest(ctx, s.set(100))
 	case "close":
-		if s.Has("ShadeDown", false) {
-			return x.ServiceRequest(ctx, s.Request("ShadeDown", nil))
+		if s.Down != "" {
+			return x.ServiceRequest(ctx, s.Request(s.Down, nil))
 		}
 		return x.ServiceRequest(ctx, s.set(0))
 	case "stop":
-		return x.ServiceRequest(ctx, s.Request("ShadeStop", nil))
+		if s.Stop == "" {
+			return errAction(&s.Meta, action)
+		}
+		return x.ServiceRequest(ctx, s.Request(s.Stop, nil))
 	case "set_position":
 		pos, ok := p.Float("position")
 		if !ok {
@@ -229,7 +360,7 @@ func (s *Shade) Do(ctx context.Context, x Executor, action string, p Params) err
 }
 
 func (s *Shade) set(pos float64) transport.Request {
-	return s.Request("ShadeSet", map[string]string{"ShadeLevel": strconv.Itoa(pct(pos))})
+	return s.Request(s.Setter, map[string]string{"ShadeLevel": strconv.Itoa(pct(pos))})
 }
 
 type Lock struct {
@@ -237,6 +368,8 @@ type Lock struct {
 	Target
 	StatusState string
 	LockedState string
+	LockReq     string
+	UnlockReq   string
 }
 
 func (l *Lock) States() []string { return nonEmpty(l.StatusState, l.LockedState) }
@@ -260,9 +393,9 @@ func (l *Lock) State(v Values) map[string]any {
 func (l *Lock) Do(ctx context.Context, x Executor, action string, _ Params) error {
 	switch action {
 	case "lock":
-		return x.ServiceRequest(ctx, l.Request("LockDoorLock", nil))
+		return x.ServiceRequest(ctx, l.Request(or(l.LockReq, "LockDoorLock"), nil))
 	case "unlock":
-		return x.ServiceRequest(ctx, l.Request("UnlockDoorLock", nil))
+		return x.ServiceRequest(ctx, l.Request(or(l.UnlockReq, "UnlockDoorLock"), nil))
 	}
 	return errAction(&l.Meta, action)
 }
@@ -291,6 +424,59 @@ type Source struct {
 	Service  transport.Service
 	Services map[string]bool
 	Apps     []App
+	// Shortcuts are requests a dealer added to the source, like the Netflix
+	// and YouTube buttons on an Apple TV in the Savant app.
+	Shortcuts []string
+	// NowPlaying maps title, artist... to the source's own states, for music
+	// servers that report them (Savant Music, Sonos).
+	NowPlaying map[string]string
+}
+
+var nowPlayingStates = map[string]string{
+	"title": "CurrentSongName", "artist": "CurrentArtistName", "album": "CurrentAlbumName",
+	"artwork": "CurrentArtworkURL", "paused": "CurrentPauseStatus", "shuffle": "CurrentShuffleStatus",
+	"repeat": "CurrentRepeatStatus",
+}
+
+func (s *Source) nowPlayingStates() []string {
+	var out []string
+	for _, k := range sortedKeys(s.NowPlaying) {
+		out = append(out, s.NowPlaying[k])
+	}
+	return out
+}
+
+func (s *Source) addNowPlaying(st map[string]any, v Values) {
+	if len(s.NowPlaying) == 0 {
+		return
+	}
+	for _, k := range []string{"title", "artist", "album"} {
+		if t := strings.TrimSpace(v[s.NowPlaying[k]]); t != "" {
+			st[k] = t
+		}
+	}
+	if st["title"] != nil || st["artist"] != nil {
+		if art := strings.TrimSpace(v[s.NowPlaying["artwork"]]); art != "" {
+			st["artwork"] = art
+		}
+	}
+	for _, k := range []string{"paused", "shuffle"} {
+		if b, ok := transport.ParseBool(v[s.NowPlaying[k]]); ok {
+			st[k] = b
+		}
+	}
+	if r := strings.TrimSpace(v[s.NowPlaying["repeat"]]); r != "" {
+		st["repeat"] = map[string]string{"0": "off", "1": "all", "2": "one"}[r]
+	}
+}
+
+func (s *Source) shortcut(name string) string {
+	for _, sc := range s.Shortcuts {
+		if strings.EqualFold(sc, name) {
+			return sc
+		}
+	}
+	return ""
 }
 
 type App struct {
@@ -329,7 +515,13 @@ type MediaRoom struct {
 	active     string
 }
 
-func (m *MediaRoom) States() []string { return nonEmpty(m.ActiveState, m.VolumeState, m.MuteState) }
+func (m *MediaRoom) States() []string {
+	out := nonEmpty(m.ActiveState, m.VolumeState, m.MuteState)
+	for _, s := range m.Sources {
+		out = append(out, s.nowPlayingStates()...)
+	}
+	return out
+}
 
 func (m *MediaRoom) activeSource(v Values) (*Source, bool) {
 	raw, ok := v[m.ActiveState]
@@ -362,6 +554,7 @@ func (m *MediaRoom) State(v Values) map[string]any {
 		if app := src.appFor(m.activeDash()); app != "" {
 			st["app"] = app
 		}
+		src.addNowPlaying(st, v)
 		m.mu.Lock()
 		m.lastSource = src.Name
 		m.mu.Unlock()
@@ -435,13 +628,29 @@ func (m *MediaRoom) Do(ctx context.Context, x Executor, action string, p Params)
 			return fmt.Errorf("%s: %s has no SetVolume request", m.ID, src.Name)
 		}
 		return req("SetVolume", map[string]string{"VolumeValue": strconv.Itoa(int(math.Round(vol)))})
-	case "play", "pause", "stop":
+	case "play", "pause", "stop", "next", "previous":
 		return req(transportRequests[action], nil)
+	case "shuffle":
+		if on, _ := p.Bool("shuffle"); on {
+			return req("ShuffleOn", nil)
+		}
+		return req("ShuffleOff", nil)
+	case "repeat":
+		switch p.String("repeat") {
+		case "all":
+			return req("RepeatOn", nil)
+		case "one":
+			if src != nil && src.Primary != nil && src.Primary.HasRequest("RepeatOne") {
+				return req("RepeatOne", nil)
+			}
+			return req("RepeatOn", nil)
+		}
+		return req("RepeatOff", nil)
 	}
 	return errAction(&m.Meta, action)
 }
 
-var transportRequests = map[string]string{"play": "Play", "pause": "Pause", "stop": "Stop"}
+var transportRequests = map[string]string{"play": "Play", "pause": "Pause", "stop": "Stop", "next": "SkipUp", "previous": "SkipDown"}
 
 // SourcePlayer is one source in a room (a PS5, a TV), shown on its own like
 // the tiles in the Savant app. It is on while the room is playing it.
@@ -453,7 +662,9 @@ type SourcePlayer struct {
 
 func (s *SourcePlayer) LockKey() string { return s.Room.ID }
 
-func (s *SourcePlayer) States() []string { return nonEmpty(s.Room.ActiveState) }
+func (s *SourcePlayer) States() []string {
+	return append(nonEmpty(s.Room.ActiveState), s.Source.nowPlayingStates()...)
+}
 
 func (s *SourcePlayer) State(v Values) map[string]any {
 	raw, ok := v[s.Room.ActiveState]
@@ -469,6 +680,9 @@ func (s *SourcePlayer) State(v Values) map[string]any {
 		}
 		st["source"] = app
 	}
+	if st["on"] == true {
+		s.Source.addNowPlaying(st, v)
+	}
 	return st
 }
 
@@ -477,16 +691,110 @@ func (s *SourcePlayer) Do(ctx context.Context, x Executor, action string, p Para
 	case "turn_on":
 		return s.Room.powerOn(ctx, x, s.Source.Service)
 	case "select_source":
-		app := s.Source.app(p.String("source"))
-		if app == nil {
-			return fmt.Errorf("%s has no app %q", s.Source.Name, p.String("source"))
+		name := p.String("source")
+		if app := s.Source.app(name); app != nil {
+			return s.Room.powerOn(ctx, x, app.Service)
 		}
-		return s.Room.powerOn(ctx, x, app.Service)
+		if sc := s.Source.shortcut(name); sc != "" {
+			if !s.playing() {
+				if err := s.Room.powerOn(ctx, x, s.Source.Service); err != nil {
+					return err
+				}
+			}
+			return x.ServiceRequest(ctx, transport.Request{Service: s.Source.Service, Name: sc})
+		}
+		return fmt.Errorf("%s has no app %q", s.Source.Name, name)
 	}
 	if src, _ := s.Room.current(); src != s.Source {
 		return fmt.Errorf("%s isn't playing in %s", s.Source.Name, s.Room.Zone)
 	}
 	return s.Room.Do(ctx, x, action, p)
+}
+
+func (s *SourcePlayer) playing() bool {
+	src, _ := s.Room.current()
+	return src == s.Source
+}
+
+// Remote sends a source's own requests (OSDCursorUp, Menu...) or aliases like "up".
+type Remote struct {
+	Meta
+	Player *SourcePlayer
+}
+
+var remoteAliases = map[string]string{
+	"up": "OSDCursorUp", "down": "OSDCursorDown", "left": "OSDCursorLeft", "right": "OSDCursorRight",
+	"select": "OSDSelect", "ok": "OSDSelect", "enter": "OSDSelect", "menu": "Menu", "home": "Home",
+	"back": "Back", "exit": "Exit", "play": "Play", "pause": "Pause", "stop": "Stop",
+	"next": "SkipUp", "previous": "SkipDown", "volume_up": "VolumeUp", "volume_down": "VolumeDown",
+	"mute": "MuteOn", "unmute": "MuteOff", "info": "Info", "guide": "Guide",
+	"channel_up": "ChannelUp", "channel_down": "ChannelDown",
+}
+
+func (r *Remote) LockKey() string { return r.Player.LockKey() }
+
+func (r *Remote) States() []string { return r.Player.States() }
+
+func (r *Remote) State(v Values) map[string]any {
+	st := r.Player.State(v)
+	if st == nil {
+		return nil
+	}
+	return map[string]any{"on": st["on"]}
+}
+
+func (r *Remote) Do(ctx context.Context, x Executor, action string, p Params) error {
+	if action != "send_command" {
+		return r.Player.Do(ctx, x, action, p)
+	}
+	var cmds []string
+	switch c := p["command"].(type) {
+	case string:
+		cmds = []string{c}
+	case []any:
+		for _, v := range c {
+			if s, ok := v.(string); ok {
+				cmds = append(cmds, s)
+			}
+		}
+	}
+	if len(cmds) == 0 {
+		return fmt.Errorf("%s: send_command needs a command", r.ID)
+	}
+	src := r.Player.Source
+	reqs := make([]string, 0, len(cmds))
+	for _, c := range cmds {
+		name := r.resolve(c)
+		if name == "" {
+			return fmt.Errorf("%s has no command %q", src.Name, c)
+		}
+		reqs = append(reqs, name)
+	}
+	for _, name := range reqs {
+		if err := x.ServiceRequest(ctx, transport.Request{Service: src.Service, Name: name}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Remote) resolve(cmd string) string {
+	d := r.Player.Source.Primary
+	if d == nil {
+		if a := remoteAliases[strings.ToLower(cmd)]; a != "" {
+			return a
+		}
+		return cmd
+	}
+	for name := range d.Requests {
+		if strings.EqualFold(name, cmd) {
+			return name
+		}
+	}
+	if a := remoteAliases[strings.ToLower(cmd)]; a != "" && d.HasRequest(a) {
+		return a
+	}
+	return ""
 }
 
 func (m *MediaRoom) powerOn(ctx context.Context, x Executor, svc transport.Service) error {
@@ -532,6 +840,15 @@ func (m *MediaRoom) current() (*Source, *transport.Service) {
 	return nil, nil
 }
 
+// Camera has nothing to poll; Home Assistant reads the camera itself.
+type Camera struct{ Meta }
+
+func (c *Camera) States() []string            { return nil }
+func (c *Camera) State(Values) map[string]any { return map[string]any{} }
+func (c *Camera) Do(_ context.Context, _ Executor, action string, _ Params) error {
+	return errAction(&c.Meta, action)
+}
+
 type Sensor struct {
 	Meta
 	StateName string
@@ -557,6 +874,13 @@ func (s *Sensor) State(v Values) map[string]any {
 
 func (s *Sensor) Do(_ context.Context, _ Executor, action string, _ Params) error {
 	return errAction(&s.Meta, action)
+}
+
+func or(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 func nonEmpty(s ...string) []string {

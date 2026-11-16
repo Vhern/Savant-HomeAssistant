@@ -1,4 +1,4 @@
-"""Buttons on the Savant host device."""
+"""Keypad buttons, and buttons on the Savant host device."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SavantConfigEntry
+from .entity import SavantEntity, metas
 from .hub import SavantHub
 
 
@@ -34,7 +35,8 @@ BUTTONS = (
 async def async_setup_entry(
     hass: HomeAssistant, entry: SavantConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    async_add_entities(SavantButton(entry.runtime_data, d) for d in BUTTONS)
+    hub = entry.runtime_data
+    async_add_entities([*(SavantButton(hub, d) for d in BUTTONS), *(SavantKeypadButton(hub, m) for m in metas(hub, "button"))])
 
 
 class SavantButton(ButtonEntity):
@@ -49,3 +51,16 @@ class SavantButton(ButtonEntity):
 
     async def async_press(self) -> None:
         await self.entity_description.press(self.hub)
+
+
+class SavantKeypadButton(SavantEntity, ButtonEntity):
+    def __init__(self, hub: SavantHub, meta) -> None:
+        super().__init__(hub, meta)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, bool] | None:
+        led = self.data.get("led")
+        return None if led is None else {"led": led}
+
+    async def async_press(self) -> None:
+        await self.command("press")
