@@ -49,7 +49,7 @@ Home Assistant connects to the agent over a WebSocket on port 8765. The agent ch
 
 ## Development
 
-You need Go and Python 3.13 or newer.
+You need Go and Python 3.14 or newer.
 
 ```bash
 make agent              # builds the agent into custom_components/savant/bin
