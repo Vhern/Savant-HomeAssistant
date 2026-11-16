@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from unittest.mock import patch
 
 from homeassistant.config_entries import ConfigEntryState
@@ -34,6 +35,9 @@ async def test_installs_agent_and_builds_entities(hass: HomeAssistant, savant_ho
     media = hass.states.get("media_player.room_1_media")
     assert media is not None, sorted(hass.states.async_entity_ids())
     assert media.state == "off"
+    for source in ("ps5", "hd_tv", "hd_tv_2"):
+        assert hass.states.get(f"media_player.room_1_{source}").state == "off"
+    assert hass.states.get("media_player.room_1_hd_tv").attributes["device_class"] == "tv"
     assert media.attributes["source_list"] == ["HD TV", "HD TV 2", "PS5"]
     assert media.attributes["device_class"] == "tv"
     assert hass.states.get("lock.room_1_lock").state == "unlocked"
@@ -62,6 +66,8 @@ async def test_commands_and_live_state(hass: HomeAssistant, savant_host) -> None
     assert hass.states.get("media_player.room_1_media").attributes["source"] == "PS5"
     assert "servicerequest Room 1 PS5 Game_console 1 SVC_AV_GAME PowerOn" in savant_host.log()
 
+    await wait_for(hass, lambda: hass.states.get("media_player.room_1_ps5").state == "on")
+    assert hass.states.get("media_player.room_1_hd_tv").state == "off"
     await hass.services.async_call("media_player", "volume_up", {"entity_id": "media_player.room_1_media"}, blocking=True)
     assert "servicerequest Room 1 PS5 Game_console 1 SVC_AV_GAME VolumeUp" in savant_host.log()
 
@@ -162,3 +168,30 @@ async def test_new_token_restarts_running_agent(hass: HomeAssistant, savant_host
     assert await installer.ensure(TOKEN, savant_host.port) == "restarted"
     await setup(hass, savant_host)
     assert hass.states.get("binary_sensor.vhern_s_connection").state == "on"
+
+
+async def test_taps_respond_before_savant_confirms(hass: HomeAssistant, savant_host) -> None:
+    savant_host.env["FAKE_DELAY"] = "2"
+    await setup(hass, savant_host)
+
+    start = time.monotonic()
+    await hass.services.async_call("lock", "lock", {"entity_id": "lock.room_1_lock"}, blocking=True)
+    assert time.monotonic() - start < 1.5
+    assert hass.states.get("lock.room_1_lock").state == "locking"
+    await wait_for(hass, lambda: hass.states.get("lock.room_1_lock").state == "locked")
+
+    await hass.services.async_call(
+        "media_player", "select_source", {"entity_id": "media_player.room_1_media", "source": "PS5"}, blocking=True
+    )
+    media = hass.states.get("media_player.room_1_media")
+    assert media.state == "on" and media.attributes["source"] == "PS5"
+
+
+async def test_source_player_turns_on_its_source(hass: HomeAssistant, savant_host) -> None:
+    await setup(hass, savant_host)
+    await hass.services.async_call("media_player", "turn_on", {"entity_id": "media_player.room_1_hd_tv_2"}, blocking=True)
+    await wait_for(hass, lambda: hass.states.get("media_player.room_1_media").attributes.get("source") == "HD TV 2")
+    assert "servicerequest Room 1 HD TV 2 HD_monitor 1 SVC_AV_TV PowerOn" in savant_host.log()
+    await wait_for(hass, lambda: hass.states.get("media_player.room_1_hd_tv_2").state == "on")
+    await hass.services.async_call("media_player", "turn_off", {"entity_id": "media_player.room_1_hd_tv_2"}, blocking=True)
+    await wait_for(hass, lambda: hass.states.get("media_player.room_1_media").state == "off")

@@ -54,6 +54,7 @@ type Engine struct {
 	values    Values
 	states    map[string]json.RawMessage
 	subs      map[*Sub]struct{}
+	cmdLocks  map[string]*sync.Mutex
 	failures  int
 	available bool
 }
@@ -67,6 +68,7 @@ func NewEngine(tr transport.Transport, cfg config.Config, version string, log *s
 		values:    Values{},
 		states:    map[string]json.RawMessage{},
 		subs:      map[*Sub]struct{}{},
+		cmdLocks:  map[string]*sync.Mutex{},
 		available: true,
 	}
 }
@@ -277,6 +279,11 @@ func (e *Engine) closeSubs() {
 
 var ErrUnknownEntity = errors.New("unknown entity")
 
+var (
+	commandAck     = 300 * time.Millisecond
+	commandTimeout = 30 * time.Second
+)
+
 func (e *Engine) Command(ctx context.Context, id, action string, p Params) error {
 	e.mu.Lock()
 	en, ok := e.byID[id]
@@ -285,9 +292,48 @@ func (e *Engine) Command(ctx context.Context, id, action string, p Params) error
 		return fmt.Errorf("%w %q", ErrUnknownEntity, id)
 	}
 	e.log.Info("command", "entity", id, "action", action, "params", p)
-	err := en.Do(ctx, e.tr, action, p)
-	e.Refresh()
-	return err
+	key := id
+	if k, ok := en.(interface{ LockKey() string }); ok {
+		key = k.LockKey()
+	}
+	lock := e.commandLock(key)
+	done := make(chan error, 1)
+	go func() {
+		lock.Lock()
+		defer lock.Unlock()
+		cctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		defer cancel()
+		start := time.Now()
+		err := en.Do(cctx, e.tr, action, p)
+		e.Refresh()
+		if err != nil {
+			e.log.Warn("command failed", "entity", id, "action", action, "err", err)
+		} else {
+			e.log.Debug("command done", "entity", id, "action", action, "took", time.Since(start))
+		}
+		done <- err
+	}()
+	// sclibridge takes a couple of seconds to return from a service request even
+	// though Savant acts on it right away, so don't make Home Assistant wait for it.
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(commandAck):
+		return nil
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+func (e *Engine) commandLock(id string) *sync.Mutex {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	l, ok := e.cmdLocks[id]
+	if !ok {
+		l = &sync.Mutex{}
+		e.cmdLocks[id] = l
+	}
+	return l
 }
 
 func (e *Engine) ServiceRequest(ctx context.Context, req transport.Request) error {

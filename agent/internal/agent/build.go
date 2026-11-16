@@ -219,8 +219,13 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 	}
 
 	for _, z := range inv.Zones {
-		if room := buildMediaRoom(inv, z); room != nil {
-			add(room)
+		room := buildMediaRoom(inv, z)
+		if room == nil {
+			continue
+		}
+		add(room)
+		for _, src := range room.Sources {
+			add(sourcePlayer(room, src))
 		}
 	}
 
@@ -317,10 +322,37 @@ func buildMediaRoom(inv *Inventory, zone string) *MediaRoom {
 		class = "tv"
 	}
 	room.Attributes = map[string]any{
-		"sources": names, "device_class": class,
+		"kind": "room", "sources": names, "device_class": class,
 		"volume_step": step, "volume_mute": mute, "volume_set": set, "volume_max": 100,
 	}
 	return room
+}
+
+func sourcePlayer(room *MediaRoom, src *Source) *SourcePlayer {
+	attrs := map[string]any{"kind": "source", "device_class": ""}
+	if src.Service.Type == "SVC_AV_TV" {
+		attrs["device_class"] = "tv"
+	}
+	if d := src.Primary; d != nil {
+		attrs["volume_step"] = d.HasRequest("VolumeUp")
+		attrs["volume_mute"] = d.HasRequest("MuteOn")
+		attrs["volume_set"] = d.HasRequest("SetVolume")
+		for action, req := range transportRequests {
+			attrs[action] = d.HasRequest(req)
+		}
+	}
+	return &SourcePlayer{
+		Meta: Meta{
+			ID:         "media_player." + config.Slug(room.Zone+"_"+src.Name),
+			Platform:   "media_player",
+			Name:       src.Name,
+			Zone:       room.Zone,
+			Attributes: attrs,
+			Source:     "source " + src.Service.Dash(),
+		},
+		Room:   room,
+		Source: src,
+	}
 }
 
 // Prefer a source's main service over its app inputs, then the lowest variant.

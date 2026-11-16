@@ -10,5 +10,5 @@
   "issue_tracker": "https://github.com/Vhern/Savant-HomeAssistant/issues",
   "loggers": ["custom_components.savant", "asyncssh"],
   "requirements": ["asyncssh==2.24.1"],
-  "version": "0.2.0"
+  "version": "0.3.0"
 }

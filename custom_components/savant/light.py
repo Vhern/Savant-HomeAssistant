@@ -42,12 +42,13 @@ class SavantLight(SavantEntity, LightEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         params: dict[str, Any] = {}
+        expect: dict[str, Any] = {"on": True}
         if ATTR_BRIGHTNESS in kwargs:
-            params["brightness"] = max(1, round(brightness_to_value(SCALE, kwargs[ATTR_BRIGHTNESS])))
+            params["brightness"] = expect["brightness"] = max(1, round(brightness_to_value(SCALE, kwargs[ATTR_BRIGHTNESS])))
         if ATTR_TRANSITION in kwargs:
             params["transition"] = kwargs[ATTR_TRANSITION]
-        await self.command("turn_on", **params)
+        await self.command("turn_on", expect, **params)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         params = {"transition": kwargs[ATTR_TRANSITION]} if ATTR_TRANSITION in kwargs else {}
-        await self.command("turn_off", **params)
+        await self.command("turn_off", {"on": False}, **params)

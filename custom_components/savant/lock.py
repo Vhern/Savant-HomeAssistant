@@ -20,16 +20,28 @@ async def async_setup_entry(
 
 
 class SavantLock(SavantEntity, LockEntity):
+    def _moving_to(self, locked: bool) -> bool:
+        data = self.data
+        return self.pending is not None and data.get("locked") is locked and self.real.get("locked") is not locked
+
     @property
     def is_locked(self) -> bool | None:
-        return self.data.get("locked")
+        return self.real.get("locked")
+
+    @property
+    def is_locking(self) -> bool:
+        return self._moving_to(True)
+
+    @property
+    def is_unlocking(self) -> bool:
+        return self._moving_to(False)
 
     @property
     def is_jammed(self) -> bool | None:
-        return self.data.get("jammed")
+        return self.real.get("jammed")
 
     async def async_lock(self, **kwargs: Any) -> None:
-        await self.command("lock")
+        await self.command("lock", {"locked": True})
 
     async def async_unlock(self, **kwargs: Any) -> None:
-        await self.command("unlock")
+        await self.command("unlock", {"locked": False})

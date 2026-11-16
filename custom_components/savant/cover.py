@@ -52,4 +52,4 @@ class SavantShade(SavantEntity, CoverEntity):
         await self.command("stop")
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
-        await self.command("set_position", position=kwargs[ATTR_POSITION])
+        await self.command("set_position", {"position": kwargs[ATTR_POSITION]}, position=kwargs[ATTR_POSITION])

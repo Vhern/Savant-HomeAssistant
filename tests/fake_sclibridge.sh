@@ -19,6 +19,7 @@ userzones) echo "Room 1" ;;
 servicesforzone) [ "$1" = "Room 1" ] && cat "$FAKE_SERVICES" ;;
 readstate) for n in "$@"; do get "$n"; done ;;
 servicerequest)
+  [ -n "$FAKE_DELAY" ] && sleep "$FAKE_DELAY"
   case "$6" in
   PowerOn) put "$1.ActiveService" "$1-$2-$3-$4-$5" ;;
   PowerOff) put "$1.ActiveService" "" ;;

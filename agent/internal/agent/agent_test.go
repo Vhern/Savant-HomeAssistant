@@ -25,6 +25,8 @@ type fakeHost struct {
 	reqs   []string
 	ran    []transport.Scene
 	fail   bool
+	delay  time.Duration
+	reqErr error
 }
 
 func (f *fakeHost) set(k, v string) {
@@ -51,6 +53,13 @@ func (f *fakeHost) ReadStates(_ context.Context, names []string) (map[string]str
 	return out, nil
 }
 func (f *fakeHost) ServiceRequest(_ context.Context, r transport.Request) error {
+	f.mu.Lock()
+	delay, reqErr := f.delay, f.reqErr
+	f.mu.Unlock()
+	time.Sleep(delay)
+	if reqErr != nil {
+		return reqErr
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s := r.Service.Key() + " " + r.Name
@@ -161,7 +170,8 @@ func TestBuild(t *testing.T) {
 	for _, e := range ents {
 		ids = append(ids, e.Info().ID)
 	}
-	want := "cover.vhern_s_01_002 light.vhern_s_001 lock.door_lock_controller_1 media_player.room_1 scene.cced55fe_a9e1 " +
+	want := "cover.vhern_s_01_002 light.vhern_s_001 lock.door_lock_controller_1 media_player.room_1 " +
+		"media_player.room_1_hd_tv media_player.room_1_hd_tv_2 media_player.room_1_ps5 scene.cced55fe_a9e1 " +
 		"sensor.host_cpu sensor.host_disk_free sensor.host_memory sensor.host_software sensor.host_uptime"
 	if got := strings.Join(ids, " "); got != want {
 		t.Errorf("ids:\n got %s\nwant %s\nskipped %v", got, want, skipped)
@@ -206,6 +216,10 @@ func TestMediaRoom(t *testing.T) {
 	}
 	if got := strings.Join(host.reqs, "\n"); got != strings.Join(want, "\n") {
 		t.Errorf("requests:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
+	}
+	must(t, room.Do(ctx, host, "volume_up", nil)) // goes to PS5 before any poll
+	if last := host.reqs[len(host.reqs)-1]; last != "Room 1|PS5|Game_console|1|SVC_AV_GAME VolumeUp" {
+		t.Errorf("volume after turn_on went to %q", last)
 	}
 	room.State(Values{active: ""})
 	if err := room.Do(ctx, host, "volume_up", nil); err == nil {
@@ -278,7 +292,8 @@ func TestEngineStreamsChanges(t *testing.T) {
 	}
 	host.set(active, "Room 1-PS5-Game_console-1-SVC_AV_GAME")
 	e.poll(ctx)
-	if got := drain(sub); len(got) != 1 || string(got["media_player.room_1"]) != `{"on":true,"source":"PS5"}` {
+	if got := drain(sub); len(got) != 2 || string(got["media_player.room_1"]) != `{"on":true,"source":"PS5"}` ||
+		string(got["media_player.room_1_ps5"]) != `{"on":true}` {
 		t.Errorf("change events = %v", stringify(got))
 	}
 
@@ -330,5 +345,68 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCommandsAnswerBeforeSclibridgeFinishes(t *testing.T) {
+	host := &fakeHost{states: map[string]string{}, delay: 2 * time.Second}
+	e := NewEngine(host, config.Defaults(), "test", quiet)
+	ents := mustBuild(t)
+	e.entities, e.byID = ents, byID(ents)
+	ctx := context.Background()
+
+	start := time.Now()
+	must(t, e.Command(ctx, "lock.door_lock_controller_1", "unlock", nil))
+	must(t, e.Command(ctx, "lock.door_lock_controller_1", "lock", nil))
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("commands took %s; they should not wait for sclibridge", d)
+	}
+	time.Sleep(4500 * time.Millisecond)
+	host.mu.Lock()
+	got := strings.Join(host.reqs, "\n")
+	host.mu.Unlock()
+	want := "Room 1|Door Lock Controller|Door_lock|1|SVC_ENV_DOORLOCK UnlockDoorLock DoorLockAddress=1\n" +
+		"Room 1|Door Lock Controller|Door_lock|1|SVC_ENV_DOORLOCK LockDoorLock DoorLockAddress=1"
+	if got != want {
+		t.Errorf("commands for one device must run in order:\n%s", got)
+	}
+
+	host.mu.Lock()
+	host.delay, host.reqErr = 0, io.ErrClosedPipe
+	host.mu.Unlock()
+	if err := e.Command(ctx, "lock.door_lock_controller_1", "lock", nil); err == nil {
+		t.Error("a command that fails quickly should report the error")
+	}
+}
+
+func TestSourcePlayers(t *testing.T) {
+	host := &fakeHost{states: map[string]string{}}
+	ents := byID(mustBuild(t))
+	room := ents["media_player.room_1"].(*MediaRoom)
+	ps5 := ents["media_player.room_1_ps5"].(*SourcePlayer)
+	tv := ents["media_player.room_1_hd_tv"].(*SourcePlayer)
+	ctx := context.Background()
+
+	if ps5.Attributes["device_class"] != "" || tv.Attributes["device_class"] != "tv" || tv.Attributes["play"] != true {
+		t.Errorf("attributes: ps5=%v tv=%v", ps5.Attributes, tv.Attributes)
+	}
+	vals := Values{active: "Room 1-HD TV-HD_monitor-7-SVC_AV_EXTERNALMEDIASERVER"}
+	room.State(vals)
+	if ps5.State(vals)["on"] != false || tv.State(vals)["on"] != true {
+		t.Errorf("only the TV should be on: ps5=%v tv=%v", ps5.State(vals), tv.State(vals))
+	}
+	if err := ps5.Do(ctx, host, "volume_up", nil); err == nil {
+		t.Error("volume on a source that isn't playing should fail")
+	}
+	must(t, ps5.Do(ctx, host, "turn_on", nil))
+	must(t, ps5.Do(ctx, host, "volume_up", nil))
+	must(t, ps5.Do(ctx, host, "turn_off", nil))
+	want := []string{
+		"Room 1|PS5|Game_console|1|SVC_AV_GAME PowerOn",
+		"Room 1|PS5|Game_console|1|SVC_AV_GAME VolumeUp",
+		"Room 1|PS5|Game_console|1|SVC_AV_GAME PowerOff",
+	}
+	if got := strings.Join(host.reqs, "\n"); got != strings.Join(want, "\n") {
+		t.Errorf("requests:\n%s", got)
 	}
 }

@@ -372,7 +372,11 @@ func (m *MediaRoom) Do(ctx context.Context, x Executor, action string, p Params)
 		if src == nil {
 			return fmt.Errorf("%s: unknown source %q", m.ID, name)
 		}
-		return x.ServiceRequest(ctx, transport.Request{Service: src.Service, Name: "PowerOn"})
+		if err := x.ServiceRequest(ctx, transport.Request{Service: src.Service, Name: "PowerOn"}); err != nil {
+			return err
+		}
+		m.setActive(src.Service.Dash())
+		return nil
 	}
 
 	src, svc := m.current()
@@ -384,7 +388,11 @@ func (m *MediaRoom) Do(ctx context.Context, x Executor, action string, p Params)
 	}
 	switch action {
 	case "turn_off":
-		return req("PowerOff", nil)
+		if err := req("PowerOff", nil); err != nil {
+			return err
+		}
+		m.setActive("")
+		return nil
 	case "volume_up":
 		return req("VolumeUp", nil)
 	case "volume_down":
@@ -403,8 +411,50 @@ func (m *MediaRoom) Do(ctx context.Context, x Executor, action string, p Params)
 			return fmt.Errorf("%s: %s has no SetVolume request", m.ID, src.Name)
 		}
 		return req("SetVolume", map[string]string{"VolumeValue": strconv.Itoa(int(math.Round(vol)))})
+	case "play", "pause", "stop":
+		return req(transportRequests[action], nil)
 	}
 	return errAction(&m.Meta, action)
+}
+
+var transportRequests = map[string]string{"play": "Play", "pause": "Pause", "stop": "Stop"}
+
+// SourcePlayer is one source in a room (a PS5, a TV), shown on its own like
+// the tiles in the Savant app. It is on while the room is playing it.
+type SourcePlayer struct {
+	Meta
+	Room   *MediaRoom
+	Source *Source
+}
+
+func (s *SourcePlayer) LockKey() string { return s.Room.ID }
+
+func (s *SourcePlayer) States() []string { return nonEmpty(s.Room.ActiveState) }
+
+func (s *SourcePlayer) State(v Values) map[string]any {
+	raw, ok := v[s.Room.ActiveState]
+	if !ok {
+		return nil
+	}
+	return map[string]any{"on": s.Source.Services[strings.TrimSpace(raw)]}
+}
+
+func (s *SourcePlayer) Do(ctx context.Context, x Executor, action string, p Params) error {
+	if action == "turn_on" {
+		return s.Room.Do(ctx, x, "select_source", Params{"source": s.Source.Name})
+	}
+	if src, _ := s.Room.current(); src != s.Source {
+		return fmt.Errorf("%s isn't playing in %s", s.Source.Name, s.Room.Zone)
+	}
+	return s.Room.Do(ctx, x, action, p)
+}
+
+// setActive records what a command just did, so the next command goes to the
+// right service before the poll catches up.
+func (m *MediaRoom) setActive(dash string) {
+	m.mu.Lock()
+	m.active = dash
+	m.mu.Unlock()
 }
 
 func (m *MediaRoom) current() (*Source, *transport.Service) {

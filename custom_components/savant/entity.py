@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from homeassistant.const import EntityCategory
+from homeassistant.core import CALLBACK_TYPE, callback
 from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.event import async_call_later
 
 from .hub import SavantHub
+
+PENDING_TIMEOUT = 10
 
 MODELS = {
     "light": "Savant lighting load",
     "cover": "Savant shade",
     "lock": "Savant door lock",
-    "media_player": "Savant room audio/video",
+    "room": "Savant room audio/video",
+    "source": "Savant source",
 }
 
 
@@ -33,9 +39,10 @@ class SavantEntity(Entity):
         self._attr_unique_id = f"{hub.uid}_{self.sid}"
         if zone:
             platform = meta["platform"]
-            name = "Media" if platform == "media_player" else meta["name"]
+            kind = self.attrs.get("kind", platform)
+            name = "Media" if kind == "room" else meta["name"]
             self._attr_name = None
-            self._attr_device_info = hub.entity_device(self.sid, name, zone, MODELS.get(platform, "Savant"))
+            self._attr_device_info = hub.entity_device(self.sid, name, zone, MODELS.get(kind, "Savant"))
         else:
             self._attr_name = meta["name"]
             self._attr_device_info = hub.host_device()
@@ -43,10 +50,23 @@ class SavantEntity(Entity):
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
         if icon := self.attrs.get("icon"):
             self._attr_icon = icon
+        self.pending: dict[str, Any] | None = None
+        self._pending_until = 0.0
+        self._pending_timer: CALLBACK_TYPE | None = None
+
+    @property
+    def real(self) -> dict[str, Any]:
+        return self.hub.states.get(self.sid) or {}
 
     @property
     def data(self) -> dict[str, Any]:
-        return self.hub.states.get(self.sid) or {}
+        real = self.real
+        if self.pending is not None:
+            confirmed = all(real.get(k) == v for k, v in self.pending.items())
+            if not confirmed and time.monotonic() < self._pending_until:
+                return {**real, **self.pending}
+            self._clear_pending()
+        return real
 
     @property
     def available(self) -> bool:
@@ -55,5 +75,32 @@ class SavantEntity(Entity):
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self.hub.async_add_listener(self.sid, self.async_write_ha_state))
 
-    async def command(self, action: str, **params: Any) -> None:
-        await self.hub.async_command(self.sid, action, params)
+    @callback
+    def _clear_pending(self) -> None:
+        self.pending = None
+        if self._pending_timer:
+            self._pending_timer()
+            self._pending_timer = None
+
+    async def command(self, action: str, expect: dict[str, Any] | None = None, **params: Any) -> None:
+        """`expect` is shown right away, until Savant reports it or 10 seconds pass."""
+        if expect:
+            self._clear_pending()
+            self.pending = expect
+            self._pending_until = time.monotonic() + PENDING_TIMEOUT
+            self._pending_timer = async_call_later(self.hass, PENDING_TIMEOUT + 0.1, self._pending_expired)
+            self.async_write_ha_state()
+        try:
+            await self.hub.async_command(self.sid, action, params)
+        except Exception:
+            self._clear_pending()
+            self.async_write_ha_state()
+            raise
+
+    @callback
+    def _pending_expired(self, _now: Any) -> None:
+        self._pending_timer = None
+        self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._clear_pending()
