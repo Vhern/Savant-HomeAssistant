@@ -8,10 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"savant-ha/internal/config"
+	"savant-ha/internal/savantcfg"
 	"savant-ha/internal/transport"
 )
 
@@ -57,6 +61,8 @@ type Engine struct {
 	cmdLocks  map[string]*sync.Mutex
 	failures  int
 	available bool
+
+	sceneStamp string
 }
 
 func NewEngine(tr transport.Transport, cfg config.Config, version string, log *slog.Logger) *Engine {
@@ -116,12 +122,16 @@ func (e *Engine) Run(ctx context.Context) error {
 		defer t.Stop()
 		redisc = t.C
 	}
+	sceneCheck := time.NewTicker(5 * time.Second)
+	defer sceneCheck.Stop()
 	e.poll(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			e.closeSubs()
 			return nil
+		case <-sceneCheck.C:
+			e.checkScenes(ctx)
 		case <-poll.C:
 			e.poll(ctx)
 		case <-e.refresh:
@@ -158,6 +168,53 @@ func (e *Engine) discover(ctx context.Context) error {
 	}
 	e.readyOnce.Do(func() { close(e.ready) })
 	return nil
+}
+
+// checkScenes rescans when the app's scene list changes, so a scene made in the
+// Savant app shows up in seconds instead of at the next scheduled rescan.
+func (e *Engine) checkScenes(ctx context.Context) {
+	e.mu.Lock()
+	var db, known string
+	if e.inv != nil {
+		db, known = e.inv.SceneDB, sceneKey(e.inv.AppScenes)
+	}
+	e.mu.Unlock()
+	if db == "" {
+		return
+	}
+	stamp := fileStamp(db) + fileStamp(db+"-wal")
+	if stamp == e.sceneStamp {
+		return
+	}
+	e.sceneStamp = stamp
+	app, err := savantcfg.ReadAppScenes(ctx, db)
+	if err != nil {
+		e.log.Warn("reading scenes failed", "err", err)
+		return
+	}
+	if sceneKey(appScenes(app)) == known {
+		return
+	}
+	e.log.Info("scenes changed in the Savant app; rescanning")
+	if err := e.discover(ctx); err != nil {
+		e.log.Warn("rescan failed", "err", err)
+	}
+}
+
+func sceneKey(scenes []transport.Scene) string {
+	var parts []string
+	for _, sc := range scenes {
+		parts = append(parts, sc.ID+"="+sc.Name+"@"+strings.Join(sc.Rooms, ","))
+	}
+	return strings.Join(parts, ";")
+}
+
+func fileStamp(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return "-"
+	}
+	return fi.ModTime().String() + "/" + strconv.FormatInt(fi.Size(), 10)
 }
 
 func sameMetas(a, b []Entity) bool {

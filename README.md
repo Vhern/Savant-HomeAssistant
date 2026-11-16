@@ -9,8 +9,8 @@ You add it with the Savant host's IP address, user and password. Home Assistant 
 - Lights, including DMX loads, with brightness and fade time
 - Shades with open, close, stop and position
 - Door locks
-- A media player for each room, with on/off, source, volume and mute
-- Savant scenes
+- A media player for each room, and one for each source in it (a PS5, a TV), with on/off, source, volume and mute
+- Savant scenes, including the ones you make in the Savant app
 - Host CPU, memory, disk and uptime sensors
 - A `savant.service_request` action for anything else, using the same service requests as Blueprint
 

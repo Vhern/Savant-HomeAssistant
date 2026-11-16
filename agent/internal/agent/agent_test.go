@@ -152,7 +152,10 @@ func testInventory(t *testing.T) *Inventory {
 		Defs:     defs,
 		Rows:     rows,
 		Manifest: man,
-		Scenes:   []transport.Scene{{Name: "Movie Time", ID: "CCED55FE-A9E1", User: "dealer@example.com"}},
+		Scenes: []transport.Scene{
+			{Name: "Movie Time", ID: "CCED55FE-A9E1", User: "dealer@example.com"},
+			{Name: "Chill", ID: "6B32980B", User: "admin", Rooms: []string{"Great Room"}},
+		},
 	}
 }
 
@@ -175,6 +178,13 @@ func TestBuild(t *testing.T) {
 		"sensor.host_cpu sensor.host_disk_free sensor.host_memory sensor.host_software sensor.host_uptime"
 	if got := strings.Join(ids, " "); got != want {
 		t.Errorf("ids:\n got %s\nwant %s\nskipped %v", got, want, skipped)
+	}
+	found := false
+	for _, s := range skipped {
+		found = found || (s.What == "scene Chill" && strings.Contains(s.Reason, "Great Room"))
+	}
+	if !found {
+		t.Errorf("a scene for a room that no longer exists should be skipped: %v", skipped)
 	}
 	room := byID(ents)["media_player.room_1"].(*MediaRoom)
 	if src := room.Attributes["sources"].([]string); strings.Join(src, ",") != "HD TV,HD TV 2,PS5" {

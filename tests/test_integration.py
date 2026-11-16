@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import time
 from unittest.mock import patch
 
@@ -15,7 +16,7 @@ from homeassistant.helpers import entity_registry as er
 from custom_components.savant.const import CONF_PRIVATE_KEY, DOMAIN
 from custom_components.savant.installer import AuthFailed, Installer
 
-from .conftest import HOST_UID, OLD_VERSION, TOKEN, VERSION, wait_for
+from .conftest import BATH_TIME, HOST_UID, OLD_VERSION, TOKEN, VERSION, wait_for
 
 
 async def setup(hass: HomeAssistant, host) -> object:
@@ -195,3 +196,21 @@ async def test_source_player_turns_on_its_source(hass: HomeAssistant, savant_hos
     await wait_for(hass, lambda: hass.states.get("media_player.room_1_hd_tv_2").state == "on")
     await hass.services.async_call("media_player", "turn_off", {"entity_id": "media_player.room_1_hd_tv_2"}, blocking=True)
     await wait_for(hass, lambda: hass.states.get("media_player.room_1_media").state == "off")
+
+
+async def test_app_scenes(hass: HomeAssistant, savant_host) -> None:
+    await setup(hass, savant_host)
+    assert hass.states.get("scene.vhern_s_bath_time") is not None
+    assert hass.states.get("scene.vhern_s_chill") is None
+
+    await hass.services.async_call("scene", "turn_on", {"entity_id": "scene.vhern_s_bath_time"}, blocking=True)
+    assert f"activateScene Bath Time {BATH_TIME} admin" in savant_host.log()
+
+    db = savant_host.home / "Library/Application Support/RacePointMedia/statusfiles/dis/dashboard.sqlite"
+    if not db.exists():
+        db = savant_host.home / "GNUstep/Library/ApplicationSupport/RacePointMedia/statusfiles/dis/dashboard.sqlite"
+    subprocess.run(
+        ["sqlite3", str(db), "INSERT INTO Scenes (identifier, name, isGlobal) VALUES ('NEW-SCENE-1', 'Good Night', 1);"],
+        check=True,
+    )
+    await wait_for(hass, lambda: hass.states.get("scene.vhern_s_good_night") is not None, timeout=30)

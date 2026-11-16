@@ -36,6 +36,19 @@ HOST_UID = "842F579B837F0000"
 VERSION = "9.9.9"
 OLD_VERSION = "9.9.8"
 
+BATH_TIME = "A718B42D-0873-4FB3-8D26-6B4154E964B9"
+SCENE_DB = f"""
+CREATE TABLE Scenes (identifier TEXT UNIQUE, name TEXT, imageKey TEXT, tags TEXT, isGlobal INTEGER, isActive INTEGER,
+  isScheduled INTEGER, hasCustomImage INTEGER, alias TEXT, isSceneOn INTEGER);
+CREATE TABLE SceneUserMap (id INTEGER PRIMARY KEY, sceneIdentifier TEXT, user Text, sceneOrder INTEGER);
+CREATE TABLE SceneDefinitions (id INTEGER PRIMARY KEY, sceneIdentifier TEXT, definition TEXT);
+INSERT INTO Scenes (identifier, name, isGlobal) VALUES ('{BATH_TIME}', 'Bath Time', 1), ('6B32980B', 'Chill', 0);
+INSERT INTO SceneUserMap (sceneIdentifier, user) VALUES ('{BATH_TIME}', 'admin'), ('6B32980B', 'someone@example.com');
+INSERT INTO SceneDefinitions (sceneIdentifier, definition) VALUES
+  ('{BATH_TIME}', '{{"av":{{"PS5.Game_console":{{"serviceID":"SVC_AV_GAME","rooms":["Room 1"]}}}}}}'),
+  ('6B32980B', '{{"volume":{{"Great Room":20}}}}');
+"""
+
 INITIAL_STATES = {
     "Room 1.ActiveService": "",
     "Door Lock Controller.Door_lock.DoorLockStatus_1": "Unlocked",
@@ -169,6 +182,12 @@ def savant_host(socket_enabled, tmp_path, bin_dirs):
         shutil.copy(FIXTURES / "shr2000-uimanifest.json", cfg / "uimanifest.json")
         with gzip.open(FIXTURES / "shr2000-serviceImplementation.xml.gz") as src:
             (cfg / "serviceImplementation.xml").write_bytes(src.read())
+    for rel in (
+        "Library/Application Support/RacePointMedia/statusfiles/dis",
+        "GNUstep/Library/ApplicationSupport/RacePointMedia/statusfiles/dis",
+    ):
+        (home / rel).mkdir(parents=True)
+        subprocess.run(["sqlite3", str(home / rel / "dashboard.sqlite"), SCENE_DB], check=True)
     state = tmp_path / "state.txt"
     state.write_text("".join(f"{k}={v}\n" for k, v in INITIAL_STATES.items()))
     env = {

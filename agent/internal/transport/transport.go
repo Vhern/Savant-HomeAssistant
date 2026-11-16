@@ -35,9 +35,11 @@ type Request struct {
 }
 
 type Scene struct {
-	Name string `json:"name"`
-	ID   string `json:"id"`
-	User string `json:"user"`
+	Name   string   `json:"name"`
+	ID     string   `json:"id"`
+	User   string   `json:"user"`
+	Global bool     `json:"global,omitempty"`
+	Rooms  []string `json:"rooms,omitempty"`
 }
 
 type Transport interface {

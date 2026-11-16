@@ -70,7 +70,7 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
             pass
 
         session = async_get_clientsession(self.hass)
-        ws, _, snapshot = await connect_agent(session, host, agent_port, token, heartbeat=None)
+        ws, _, snapshot = await connect_agent(session, host, agent_port, token)
         await ws.close()
         data = {
             CONF_HOST: host,

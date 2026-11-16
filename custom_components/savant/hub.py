@@ -31,6 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 CONNECT_TIMEOUT = 10
 SUBSCRIBE_TIMEOUT = 90
 REQUEST_TIMEOUT = 40
+READ_TIMEOUT = 75
 MAX_BACKOFF = 60
 
 
@@ -51,12 +52,11 @@ async def agent_health(session: aiohttp.ClientSession, host: str, port: int) -> 
 
 
 async def connect_agent(
-    session: aiohttp.ClientSession, host: str, port: int, token: str, heartbeat: float | None = 30
+    session: aiohttp.ClientSession, host: str, port: int, token: str
 ) -> tuple[aiohttp.ClientWebSocketResponse, dict[str, Any], dict[str, Any]]:
     ws = await session.ws_connect(
         f"ws://{host}:{port}/ws",
         headers={"Authorization": f"Bearer {token}"},
-        heartbeat=heartbeat,
         timeout=aiohttp.ClientWSTimeout(ws_close=10),
         max_msg_size=32 * 1024 * 1024,
     )
@@ -236,12 +236,14 @@ class SavantHub:
         self._ws = ws
         self._set_connected(True)
         try:
-            async for msg in ws:
+            while True:
+                # The agent pings every 30 s, so a long silence means the connection is gone.
+                msg = await ws.receive(timeout=READ_TIMEOUT)
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     self._handle(msg.json())
-                elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE):
+                elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED):
                     break
-        except (aiohttp.ClientError, ValueError) as err:
+        except (aiohttp.ClientError, ValueError, TimeoutError) as err:
             _LOGGER.debug("Agent connection error: %s", err)
         finally:
             self._ws = None

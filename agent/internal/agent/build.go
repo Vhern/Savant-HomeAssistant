@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"runtime"
@@ -30,9 +32,11 @@ type Inventory struct {
 	Host       Host                           `json:"host"`
 	Sclibridge string                         `json:"sclibridge"`
 	ConfigDir  string                         `json:"config_dir"`
+	SceneDB    string                         `json:"scene_db,omitempty"`
 	Zones      []string                       `json:"zones"`
 	Services   map[string][]transport.Service `json:"services"`
 	Scenes     []transport.Scene              `json:"scenes"`
+	AppScenes  []transport.Scene              `json:"-"`
 	Rows       []savantcfg.Row                `json:"-"`
 	Defs       *savantcfg.Services            `json:"-"`
 	Manifest   savantcfg.Manifest             `json:"-"`
@@ -93,11 +97,7 @@ func Collect(ctx context.Context, tr transport.Transport, cfg config.Config, ver
 		}
 	}
 
-	if sc, err := tr.Scenes(ctx); err != nil {
-		inv.warn(log, "scenes: %v", err)
-	} else {
-		inv.Scenes = sc
-	}
+	inv.Scenes = collectScenes(ctx, tr, inv, log)
 	inv.Host = collectHost(ctx, tr, inv, version)
 	if withStateNames {
 		if inv.StateNames, err = tr.StateNames(ctx, ""); err != nil {
@@ -105,6 +105,33 @@ func Collect(ctx context.Context, tr transport.Transport, cfg config.Config, ver
 		}
 	}
 	return inv, nil
+}
+
+func collectScenes(ctx context.Context, tr transport.Transport, inv *Inventory, log *slog.Logger) []transport.Scene {
+	var scenes []transport.Scene
+	seen := map[string]bool{}
+	if inv.ConfigDir != "" {
+		inv.SceneDB = savantcfg.SceneDB(inv.ConfigDir)
+		app, err := savantcfg.ReadAppScenes(ctx, inv.SceneDB)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			inv.warn(log, "app scenes: %v", err)
+		}
+		inv.AppScenes = appScenes(app)
+		for _, sc := range inv.AppScenes {
+			scenes = append(scenes, sc)
+			seen[sc.ID] = true
+		}
+	}
+	legacy, err := tr.Scenes(ctx)
+	if err != nil {
+		inv.warn(log, "scenes: %v", err)
+	}
+	for _, sc := range legacy {
+		if !seen[sc.ID] {
+			scenes = append(scenes, sc)
+		}
+	}
+	return scenes
 }
 
 // The host itself shows up as the generic service with no logical component.
@@ -229,7 +256,15 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 		}
 	}
 
+	zones := map[string]bool{}
+	for _, z := range inv.Zones {
+		zones[z] = true
+	}
 	for _, sc := range inv.Scenes {
+		if missing := missingRooms(sc.Rooms, zones); len(missing) > 0 {
+			skipped = append(skipped, Skipped{"scene " + sc.Name, "uses rooms that aren't in this config: " + strings.Join(missing, ", ")})
+			continue
+		}
 		id := sc.ID
 		if id == "" {
 			id = sc.Name
@@ -245,6 +280,24 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Info().ID < out[j].Info().ID })
 	return out, skipped
+}
+
+func appScenes(app []savantcfg.AppScene) []transport.Scene {
+	out := make([]transport.Scene, 0, len(app))
+	for _, a := range app {
+		out = append(out, transport.Scene{Name: a.Name, ID: a.ID, User: a.User, Global: a.Global, Rooms: a.Rooms})
+	}
+	return out
+}
+
+func missingRooms(rooms []string, zones map[string]bool) []string {
+	var missing []string
+	for _, r := range rooms {
+		if !zones[r] {
+			missing = append(missing, r)
+		}
+	}
+	return missing
 }
 
 func hostSensors(c string) []*Sensor {
