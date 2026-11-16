@@ -59,7 +59,14 @@ make test-integration   # runs Home Assistant against the real agent and a fake 
 make zip                # builds dist/savant.zip
 ```
 
-To release, bump `version` in `custom_components/savant/manifest.json` and publish a GitHub release tagged `v<version>`. The release workflow builds the agent and attaches `savant.zip` to the release.
+To release, bump `version` in `custom_components/savant/manifest.json`, commit, and push a matching tag:
+
+```bash
+git tag v0.4.1
+git push origin v0.4.1
+```
+
+The release workflow builds the agent and publishes the release with `savant.zip` already attached, titled after the commit message. Don't create the release on GitHub yourself; if one already exists for the tag, the workflow only uploads the zip to it.
 
 You can also run the agent by hand on a host:
 
