@@ -9,13 +9,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_USERNAME, EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, ServiceValidationError
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
-from .const import CONF_HOST_KEY, CONF_PRIVATE_KEY, CONF_SSH_PORT, DOMAIN, PLATFORMS, SERVICE_REQUEST
-from .hub import SavantHub
+from .const import CONF_HOST_KEY, CONF_PLACED_UNIT, CONF_PRIVATE_KEY, CONF_SSH_PORT, DOMAIN, PLATFORMS, SERVICE_REQUEST
+from .hub import SavantHub, area_name
 from .installer import AuthFailed, HostKeyChanged, Installer, InstallError
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,6 +44,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         entries = [e for e in hass.config_entries.async_loaded_entries(DOMAIN)]
         if eid := call.data.get("config_entry_id"):
             entries = [e for e in entries if e.entry_id == eid]
+        elif len(entries) > 1:
+            raise ServiceValidationError("Several Savant hosts are set up; choose one with config_entry_id")
         if not entries:
             raise ServiceValidationError("No loaded Savant host matches")
         hub: SavantHub = entries[0].runtime_data
@@ -76,7 +79,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: SavantConfigEntry) -> bo
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, hub.async_stop))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     remove_stale(hass, entry, hub)
+    place_devices(hass, entry, hub)
     return True
+
+
+def place_devices(hass: HomeAssistant, entry: SavantConfigEntry, hub: SavantHub) -> None:
+    """Moves this host's devices when its unit name changes. Devices someone put in
+    another area themselves are left alone."""
+    placed = entry.data.get(CONF_PLACED_UNIT, "")
+    if placed == hub.unit:
+        return
+    zones: dict[tuple[str, str], str | None] = {(DOMAIN, hub.uid): None}
+    for m in hub.entities.values():
+        if device := m.get("device"):
+            zones[hub.device_identifier(device["id"])] = m.get("zone")
+    dev_reg, area_reg = dr.async_get(hass), ar.async_get(hass)
+    for dev in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
+        ident = next((i for i in dev.identifiers if i in zones), None)
+        if ident is None:
+            continue
+        current = area_reg.async_get_area(dev.area_id).name if dev.area_id else None
+        if current != area_name(placed, zones[ident]):
+            continue
+        new = hub.area(zones[ident])
+        dev_reg.async_update_device(dev.id, area_id=area_reg.async_get_or_create(new).id if new else None)
+    hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_PLACED_UNIT: hub.unit})
 
 
 OWN_ENTITIES = ("connection", "restart_agent", "rediscover")

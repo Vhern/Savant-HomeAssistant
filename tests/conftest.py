@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import gzip
+import json
 import os
 import shutil
 import signal
@@ -134,15 +135,19 @@ class FakeHost:
     port: int
     env: dict[str, str]
     bin_dirs: dict[str, Path]
+    uid: str = HOST_UID
+    name: str = "Vhern's"
+    ssh_port: int = 22
 
-    def entry(self) -> MockConfigEntry:
+    def entry(self, **options) -> MockConfigEntry:
         return MockConfigEntry(
             domain=DOMAIN,
-            title="Vhern's",
-            unique_id=HOST_UID,
+            title=self.name,
+            unique_id=self.uid,
+            options=options,
             data={
                 "host": "127.0.0.1",
-                CONF_SSH_PORT: 22,
+                CONF_SSH_PORT: self.ssh_port,
                 "username": "RPM",
                 CONF_PRIVATE_KEY: "unused",
                 CONF_HOST_KEY: "ssh-ed25519 AAAAtest",
@@ -166,8 +171,7 @@ class FakeHost:
         time.sleep(0.2)
 
 
-@pytest.fixture
-def savant_host(socket_enabled, tmp_path, bin_dirs):
+def _fake_host(tmp_path: Path, bin_dirs, uid: str = HOST_UID, name: str = "Vhern's", ssh_port: int = 22) -> FakeHost:
     home = tmp_path / "home"
     (home / "bin").mkdir(parents=True)
     shutil.copy(Path(__file__).parent / "fake_sclibridge.sh", home / "bin" / "sclibridge")
@@ -179,7 +183,9 @@ def savant_host(socket_enabled, tmp_path, bin_dirs):
         cfg = home / rel
         cfg.mkdir(parents=True)
         shutil.copy(FIXTURES / "shr2000-dataTableInfo.plist", cfg / "dataTableInfo.plist")
-        shutil.copy(FIXTURES / "shr2000-uimanifest.json", cfg / "uimanifest.json")
+        manifest = json.loads((FIXTURES / "shr2000-uimanifest.json").read_text())
+        manifest["HostUID"] = uid
+        (cfg / "uimanifest.json").write_text(json.dumps(manifest))
         with gzip.open(FIXTURES / "shr2000-serviceImplementation.xml.gz") as src:
             (cfg / "serviceImplementation.xml").write_bytes(src.read())
     for rel in (
@@ -189,7 +195,8 @@ def savant_host(socket_enabled, tmp_path, bin_dirs):
         (home / rel).mkdir(parents=True)
         subprocess.run(["sqlite3", str(home / rel / "dashboard.sqlite"), SCENE_DB], check=True)
     state = tmp_path / "state.txt"
-    state.write_text("".join(f"{k}={v}\n" for k, v in INITIAL_STATES.items()))
+    states = {**INITIAL_STATES, "Vhern's.SystemName": name}
+    state.write_text("".join(f"{k}={v}\n" for k, v in states.items()))
     env = {
         **os.environ,
         "HOME": str(home),
@@ -198,12 +205,24 @@ def savant_host(socket_enabled, tmp_path, bin_dirs):
         "FAKE_LOG": str(tmp_path / "sclibridge.log"),
         "FAKE_SERVICES": str(FIXTURES / "shr2000-servicesforzone-room1.txt"),
     }
-    host = FakeHost(home, state, tmp_path / "sclibridge.log", _free_port(), env, bin_dirs)
+    return FakeHost(home, state, tmp_path / "sclibridge.log", _free_port(), env, bin_dirs, uid, name, ssh_port)
+
+
+@pytest.fixture
+def fake_hosts():
+    """Every fake host by SSH port, so the patched SSH login reaches the right one."""
+    return {}
+
+
+@pytest.fixture
+def savant_host(socket_enabled, tmp_path, bin_dirs, fake_hosts):
+    host = _fake_host(tmp_path / "a", bin_dirs)
+    fake_hosts[host.ssh_port] = host
 
     async def connect(self):
         if self.host_key is None:
             self.host_key = "ssh-ed25519 AAAAtest"
-        return LocalConn(env)
+        return LocalConn(fake_hosts[self.port].env)
 
     with (
         patch("custom_components.savant.installer.Installer.connect", connect),
@@ -212,7 +231,16 @@ def savant_host(socket_enabled, tmp_path, bin_dirs):
         patch("custom_components.savant.hub.MAX_BACKOFF", 2),
     ):
         yield host
-    host.kill_agent()
+    for h in fake_hosts.values():
+        h.kill_agent()
+
+
+@pytest.fixture
+def second_host(savant_host, tmp_path, bin_dirs, fake_hosts):
+    """Another Savant system, like a second unit in the same building."""
+    host = _fake_host(tmp_path / "b", bin_dirs, uid="00AA11BB22CC0000", name="Unit B", ssh_port=2222)
+    fake_hosts[host.ssh_port] = host
+    return host
 
 
 async def wait_for(hass, check: Callable[[], bool], timeout: float = 20) -> None:

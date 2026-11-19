@@ -16,9 +16,12 @@ var roomDevices = map[string][2]string{
 	"keypads":  {"Keypads", "Savant keypads"},
 	"locks":    {"Locks", "Savant door locks"},
 	"media":    {"Media", "Savant room audio/video"},
+	"climate":  {"Climate", "Savant climate"},
+	"garage":   {"Garage", "Savant garage doors"},
 }
 
-var platformDevice = map[string]string{"light": "lighting", "switch": "lighting", "cover": "shades", "button": "keypads", "lock": "locks"}
+var platformDevice = map[string]string{"light": "lighting", "switch": "lighting", "cover": "shades", "button": "keypads",
+	"lock": "locks", "climate": "climate"}
 
 func roomDevice(zone, kind string) *Device {
 	d, ok := roomDevices[kind]
@@ -56,6 +59,35 @@ func buildAppEntities(inv *Inventory, add func(Entity)) map[string]bool {
 		covered["lock"] = true
 		for _, l := range app.Locks {
 			add(appLock(inv, l))
+		}
+	}
+	if len(app.HVAC) > 0 {
+		covered["climate"] = true
+		for _, h := range app.HVAC {
+			add(appThermostat(inv, h))
+		}
+	}
+	for _, g := range app.Garages {
+		add(appGarage(inv, g))
+	}
+	for _, a := range app.Alarms {
+		if e := appAlarm(inv, a); e != nil {
+			add(e)
+		}
+	}
+	for _, pl := range app.Pools {
+		if aux := appPool(inv, pl); aux != nil {
+			add(aux)
+		}
+	}
+	for _, c := range app.Chargers {
+		for _, e := range evCharger(inv, c) {
+			add(e)
+		}
+	}
+	for _, w := range app.WaterHeaters {
+		for _, e := range waterHeater(inv, w) {
+			add(e)
 		}
 	}
 	for _, c := range app.Cameras {
@@ -202,7 +234,7 @@ func appShade(inv *Inventory, s savantcfg.AppShade) *Shade {
 }
 
 func appLock(inv *Inventory, l savantcfg.AppLock) *Lock {
-	tgt := appTarget(inv, l.Zone, "", l.LockState, l.Addresses, l.Lock)
+	tgt := appTarget(inv, l.Zone, "", l.LockState, l.Addresses, l.Lock, "DoorLockAddress", "DoorLockAddress2")
 	if tgt.Service.Type == "" {
 		tgt.Service.Type = "SVC_ENV_DOORLOCK"
 	}
@@ -228,14 +260,20 @@ func appMeta(tgt Target, zone, name string, addrs []string, what string) Meta {
 
 // appTarget finds the service a row's requests go to, using the component and
 // logical component in its state name ("Main Host.Lighting.CurrentColor_4_001").
-func appTarget(inv *Inventory, zone, typ, state string, addrs []string, req string) Target {
+// Addresses become Address1, Address2... unless the service names them, like
+// DoorLockAddress and DoorLockAddress2.
+func appTarget(inv *Inventory, zone, typ, state string, addrs []string, req string, addrArgs ...string) Target {
 	comp, logical := "", ""
 	if p := strings.SplitN(state, ".", 3); len(p) == 3 {
 		comp, logical = p[0], p[1]
 	}
 	fields := map[string]string{}
 	for i, a := range addrs {
-		fields[fmt.Sprintf("Address%d", i+1)] = a
+		if i < len(addrArgs) {
+			fields[addrArgs[i]] = a
+		} else {
+			fields[fmt.Sprintf("Address%d", i+1)] = a
+		}
 	}
 	var best *savantcfg.ServiceDef
 	score := -1

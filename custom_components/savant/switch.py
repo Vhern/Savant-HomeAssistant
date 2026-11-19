@@ -1,4 +1,4 @@
-"""Savant lighting scenes, which turn on and off like switches."""
+"""Savant lighting scenes, and pool and spa auxiliaries."""
 
 from __future__ import annotations
 
@@ -20,12 +20,17 @@ async def async_setup_entry(
 
 
 class SavantSwitch(SavantEntity, SwitchEntity):
+    def __init__(self, hub, meta) -> None:
+        super().__init__(hub, meta)
+        # Pool auxiliaries don't report their state, so it stays unknown.
+        self._attr_assumed_state = bool(self.attrs.get("assumed"))
+
     @property
     def is_on(self) -> bool | None:
-        return self.data.get("on")
+        return None if self._attr_assumed_state else self.data.get("on")
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.command("turn_on", {"on": True})
+        await self.command("turn_on", None if self._attr_assumed_state else {"on": True})
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.command("turn_off", {"on": False})
+        await self.command("turn_off", None if self._attr_assumed_state else {"on": False})

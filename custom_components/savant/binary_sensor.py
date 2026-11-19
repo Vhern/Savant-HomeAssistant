@@ -1,4 +1,4 @@
-"""Connection status for the Savant host."""
+"""Connection status for the Savant host, and on/off states from Savant devices."""
 
 from __future__ import annotations
 
@@ -8,13 +8,31 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SavantConfigEntry
+from .entity import SavantEntity, metas
 from .hub import SavantHub
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: SavantConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    async_add_entities([SavantConnection(entry.runtime_data)])
+    hub = entry.runtime_data
+    async_add_entities([SavantConnection(hub), *(SavantBinarySensor(hub, m) for m in metas(hub, "binary_sensor"))])
+
+
+class SavantBinarySensor(SavantEntity, BinarySensorEntity):
+    def __init__(self, hub: SavantHub, meta) -> None:
+        super().__init__(hub, meta)
+        if dc := self.attrs.get("device_class"):
+            self._attr_device_class = BinarySensorDeviceClass(dc)
+
+    @property
+    def is_on(self) -> bool | None:
+        return self.data.get("on")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str] | None:
+        status = self.data.get("status")
+        return {"savant_status": status} if status else None
 
 
 class SavantConnection(BinarySensorEntity):

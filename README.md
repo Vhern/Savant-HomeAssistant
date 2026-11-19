@@ -16,9 +16,14 @@ You add it with the Savant host's IP address, user and password. Home Assistant 
 - A remote for each source with on-screen controls, for d-pad cards and automations (`up`, `select`, `menu` or any request name)
 - Cameras set up in Blueprint, with snapshots and the live stream
 - Energy: whole-home power, today's usage, and power per group and circuit
+- Thermostats (single and dual setpoint, fan mode, humidity), garage doors and gates
+- Alarm panels (arm away, home, night, vacation, disarm), with each security zone's status
+- Pool and spa auxiliaries, EV chargers and water heaters
+- Status for each device Savant controls: online, power and input, with its make and model
+- Savant Pro Remotes: battery, Wi-Fi, current room and firmware, as the remote reports them
 - Savant scenes, including the ones you make in the Savant app
 - Host CPU, memory, disk and uptime sensors
-- Entities grouped into devices per room: Lighting, Shades, Keypads, Locks, Media, plus one device per source and camera
+- Entities grouped into devices per room: Lighting, Shades, Keypads, Locks, Climate, Garage, Media, plus one device per source, camera and remote
 - A `savant.service_request` action for anything else, using the same service requests as Blueprint
 
 Each Savant room shows up as an area with a few devices in it (Lighting, Shades, Keypads, Media) under the Savant host. The host pushes changes, so Home Assistant updates about a second after something changes in Savant.
@@ -47,6 +52,16 @@ Home Assistant finds Savant hosts on your network by itself. They show up under 
 The password is only used during setup. Home Assistant installs its own SSH key on the host and uses that from then on. If the key stops working, Home Assistant asks for the password again.
 
 Removing the integration also removes the agent and the key from the host.
+
+## Several Savant systems
+
+One Home Assistant can run any number of Savant hosts, for example every unit in a building. Each host is added on its own, with its own agent and login.
+
+With one host nothing changes. When you add a second one, setup also asks for a unit name, like "Unit 101". That host's rooms then show up as "Unit 101 Kitchen", and its building-wide devices (energy, cameras, security) go in a "Unit 101" area. That way two units' kitchens never end up in the same area. You can set or change the unit name later under the host's Configure button. Its devices move along, except any you've put in another area yourself.
+
+To group each unit on the Areas dashboard, put its areas on a floor in Home Assistant.
+
+With more than one host, the `savant.service_request` action needs to know which host to send to.
 
 ## How it works
 
@@ -85,6 +100,9 @@ You can also run the agent by hand on a host:
 
 ## Known limitations
 
-- No climate (HVAC) support yet.
 - A room's volume level only shows if the room reports it. Volume up/down and mute work either way.
 - Camera snapshots and streams come straight from each camera, so Home Assistant needs to reach the cameras' network.
+- Thermostats, garage doors, alarms, pool and spa, EV chargers and water heaters use Savant's own request names and the names in each host's config, but haven't been tried on a real install yet. The Savant entry's diagnostics show what the agent read.
+- Pool and spa auxiliaries don't report their state, so their switches stay unknown.
+- An alarm shows a state only for Savant's own arming words (ArmedAway, Disarmed...). Zones, EV chargers, water heater extras and Pro Remotes show Savant's values as they are, since their formats and units aren't in the config.
+- No fans, and no full Apple TV app list: what their values mean isn't defined anywhere on the host.

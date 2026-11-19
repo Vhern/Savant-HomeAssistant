@@ -30,7 +30,9 @@ class SavantEntity(Entity):
         self._attr_unique_id = f"{hub.uid}_{self.sid}"
         if device := meta.get("device"):
             self._attr_name = None if self.attrs.get("use_device_name") else meta["name"]
-            self._attr_device_info = hub.entity_device(device["id"], device["name"], zone, device.get("model") or "Savant")
+            self._attr_device_info = hub.entity_device(
+                device["id"], device["name"], zone, device.get("model") or "Savant", device.get("manufacturer")
+            )
         else:
             self._attr_name = meta["name"]
             self._attr_device_info = hub.host_device()

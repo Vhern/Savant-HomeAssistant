@@ -61,3 +61,64 @@ INSERT INTO Zones (id, name, type) VALUES (9, 'SAVANT_GLOBAL_ENV_ZONE', 'Environ
 INSERT INTO CameraEntities (id, zoneID, name, componentName, logicalComponent, entityType, previewURL, fullscreenURL, highSourceURL, lowSourceURL, username, password) VALUES
   (1, 9, 'Porch Camera', 'Porch Camera', 'Security_camera1', 'Fixed', 'http://viewer:secret@10.9.9.2/cgi-bin/snapshot.cgi', 'http://viewer:secret@10.9.9.2/cgi-bin/snapshot.cgi', 'rtsp://viewer:secret@10.9.9.2/cam/realmonitor?channel=1&subtype=0', 'rtsp://viewer:secret@10.9.9.2/cam/realmonitor?channel=1&subtype=1', 'viewer', 'secret'),
   (2, 9, 'Blank Camera', 'Blank Camera', 'Security_camera1', 'Fixed', '', '', '', '', '', '');
+
+CREATE TABLE HVACEntities (id INTEGER PRIMARY KEY, zoneID INTEGER, name TEXT, addresses TEXT, temperatureSetPoints INTEGER, heat INTEGER, cool INTEGER, auto INTEGER, humiditySetPoints INTEGER, humidify INTEGER, dehumidify INTEGER, hasExternalTempSensor INTEGER, history INTEGER, stateName TEXT, tempMinRange INTEGER, tempMaxRange INTEGER, tempBuffer INTEGER, isCelsius INTEGER, homeAway INTEGER, authentication TEXT, partner TEXT);
+INSERT INTO HVACEntities (id, zoneID, name, addresses, temperatureSetPoints, heat, cool, auto, humiditySetPoints, stateName, tempMinRange, tempMaxRange, isCelsius) VALUES
+  (1, 1, 'Main Floor', '1,(null)', 2, 1, 1, 1, 0, 'Den Tstat.HVAC_controller.ThermostatCurrentTemperature_1', 50, 90, 0);
+CREATE TABLE GarageEntities (id INTEGER PRIMARY KEY, zoneID INTEGER, name TEXT, addresses TEXT, entityType TEXT, toggleCommand TEXT, openCommand TEXT, stopCommand TEXT, closeCommand TEXT, openState TEXT, errorState TEXT, supportsErrors INTEGER, supportsStatus INTEGER, supportsStop INTEGER, camera TEXT);
+INSERT INTO GarageEntities (id, zoneID, name, addresses, openCommand, stopCommand, closeCommand, openState, errorState) VALUES
+  (1, 1, 'Left Door', '2,(null)', 'OpenGarageDoor', 'StopGarageDoor', 'CloseGarageDoor', 'Garage Controller.Garage_controller.GarageDoorStatus_2', 'Garage Controller.Garage_controller.GarageDoorError_2');
+CREATE TABLE ZoneConfigComponents (id INTEGER PRIMARY KEY, component TEXT, zone TEXT, model TEXT, manufacturer TEXT, componentType TEXT, componentID TEXT, uid TEXT, zoneType TEXT, deviceType TEXT, hasActions INTEGER, typeID TEXT, internalID TEXT, stationID TEXT);
+INSERT INTO ZoneConfigComponents (component, zone, model, manufacturer, deviceType) VALUES
+  ('Den Apple TV', 'Den', 'Apple TV 4K', 'Apple', 'Media_server'),
+  ('Den TV', 'Den', 'OLED(xx)A1', 'LG', 'HD_monitor'),
+  ('Test Host', '[Test Host - Resources]', 'Pro Host', 'Savant', 'RacePointMedia_host');
+INSERT INTO ServiceImplementationZonedService (id, zone, component, logicalComponent, serviceType, serviceVariantID, alias) VALUES
+  (4, 'Den', 'Den Tstat', 'HVAC_controller', 'SVC_ENV_HVAC', '1', 'Den Tstat'),
+  (5, 'Den', 'Garage Controller', 'Garage_controller', 'SVC_ENV_GARAGE', '1', 'Garage Controller');
+INSERT INTO ServiceImplementationRequests (id, request, arguments, isCustom, isInterService) VALUES
+  (50, 'SetHVACModeOff', 'ThermostatAddress,ThermostatAddress2', 0, 0),
+  (51, 'SetHVACModeHeat', 'ThermostatAddress,ThermostatAddress2', 0, 0),
+  (52, 'SetHVACModeCool', 'ThermostatAddress,ThermostatAddress2', 0, 0),
+  (53, 'SetHVACModeAuto', 'ThermostatAddress,ThermostatAddress2', 0, 0),
+  (54, 'SetHeatPointTemperature', 'ThermostatAddress,ThermostatAddress2,HeatPointTemperature', 0, 0),
+  (55, 'SetCoolPointTemperature', 'ThermostatAddress,ThermostatAddress2,CoolPointTemperature', 0, 0),
+  (56, 'SetFanModeAuto', 'ThermostatAddress,ThermostatAddress2', 0, 0),
+  (57, 'SetFanModeOn', 'ThermostatAddress,ThermostatAddress2', 0, 0),
+  (60, 'OpenGarageDoor', 'GarageDoorAddress,GarageDoorAddress2', 0, 0),
+  (61, 'CloseGarageDoor', 'GarageDoorAddress,GarageDoorAddress2', 0, 0),
+  (62, 'StopGarageDoor', 'GarageDoorAddress,GarageDoorAddress2', 0, 0);
+INSERT INTO ServiceImplementationRequestMap (ServiceImplementationZonedService_id, ServiceImplementationRequests_id)
+  SELECT 4, id FROM ServiceImplementationRequests WHERE id BETWEEN 50 AND 59
+  UNION ALL SELECT 5, id FROM ServiceImplementationRequests WHERE id BETWEEN 60 AND 69;
+
+CREATE TABLE EVChargerEntities (id INTEGER PRIMARY KEY, zoneID INTEGER, name TEXT, ipAddress TEXT, address TEXT, startCommand TEXT, stopCommand TEXT, setRateCommand TEXT, linkedPM TEXT, linkedUID TEXT, linkedCircuitId TEXT, circuitId TEXT, chargerState TEXT, errorState TEXT, powerState TEXT, historyState TEXT, chargeRateState TEXT, chargeModeState TEXT, maxChargeRateState TEXT, minChargePowerState TEXT, maxChargePowerState TEXT, currentSessionEnergyState TEXT, currentSessionStartDateState TEXT, lastSessionEnergyState TEXT, lastSessionEndDateState TEXT);
+INSERT INTO EVChargerEntities (id, zoneID, name, address, startCommand, stopCommand, chargerState, powerState) VALUES
+  (1, 1, 'Driveway Charger', '1', 'StartCharging', 'StopCharging', 'Den Charger.EV_charger.ChargerState_1', 'Den Charger.EV_charger.ChargerPower_1');
+CREATE TABLE HotWaterHeaterEntities (id INTEGER PRIMARY KEY, zoneID INTEGER, name TEXT, address TEXT, setTempCommand TEXT, setCapacityCommand TEXT, setModeCommand TEXT, currentSetPointState TEXT, currentCapacityState TEXT, currentModeState TEXT, currentTempState TEXT, timeToSetPointState TEXT, hotWaterRemainState TEXT, partner TEXT, supportsErrors INTEGER);
+INSERT INTO HotWaterHeaterEntities (id, zoneID, name, address, setTempCommand, currentSetPointState, currentModeState, currentTempState, hotWaterRemainState) VALUES
+  (1, 1, 'Water Heater', '1', 'SetWaterTemperature', 'Den Heater.Water_heater.SetPoint_1', 'Den Heater.Water_heater.Mode_1', 'Den Heater.Water_heater.Temperature_1', 'Den Heater.Water_heater.HotWaterRemaining_1');
+INSERT INTO ServiceImplementationZonedService (id, zone, component, logicalComponent, serviceType, serviceVariantID, alias) VALUES
+  (6, 'Den', 'Den Charger', 'EV_charger', 'SVC_ENV_EVCHARGER', '1', 'Den Charger'),
+  (7, 'Den', 'Den Heater', 'Water_heater', 'SVC_ENV_WATERHEATER', '1', 'Den Heater');
+INSERT INTO ServiceImplementationRequests (id, request, arguments, isCustom, isInterService) VALUES
+  (70, 'StartCharging', 'Address1', 0, 0), (71, 'StopCharging', 'Address1', 0, 0),
+  (80, 'SetWaterTemperature', 'Address1,Temperature', 0, 0);
+INSERT INTO ServiceImplementationRequestMap (ServiceImplementationZonedService_id, ServiceImplementationRequests_id) VALUES (6, 70), (6, 71), (7, 80);
+
+CREATE TABLE SecuritySystemEntities (id INTEGER PRIMARY KEY, zoneID INTEGER, name TEXT, componentName TEXT, entityType TEXT, partitionNumber TEXT, zoneNumber TEXT, hasBypass INTEGER, hasLCDFeedback INTEGER, statusState TEXT, bypassToggleState TEXT, bypassTextState TEXT, buttonAssignments TEXT, keypadLabels TEXT, smartPinConfig TEXT, emergencyLabels TEXT, partner TEXT);
+INSERT INTO SecuritySystemEntities (id, zoneID, name, componentName, entityType, partitionNumber, zoneNumber, statusState) VALUES
+  (1, 9, 'House', 'Alarm Panel', 'Partition', '1', '', 'Alarm Panel.Security_system.CurrentPartitionArmingStatus_1'),
+  (2, 9, 'Front Door', 'Alarm Panel', 'Zone', '1', '3', 'Alarm Panel.Security_system.CurrentZoneStatus_3');
+CREATE TABLE PoolAndSpaEntities (id INTEGER PRIMARY KEY, zoneID INTEGER, name TEXT, entityType TEXT, auxiliaryNumber TEXT);
+INSERT INTO PoolAndSpaEntities (id, zoneID, name, entityType, auxiliaryNumber) VALUES (1, 1, 'Pool Light', 'Auxiliary', '2'), (2, 1, 'Heater', 'Heater', '');
+INSERT INTO ServiceImplementationZonedService (id, zone, component, logicalComponent, serviceType, serviceVariantID, alias) VALUES
+  (9, 'SAVANT_GLOBAL_ENV_ZONE', 'Alarm Panel', 'Security_system', 'SVC_ENV_SECURITYSYSTEM', '1', 'Alarm Panel'),
+  (10, 'Den', 'Pool Controller', 'Pool_controller', 'SVC_ENV_POOLANDSPA', '1', 'Pool Controller');
+INSERT INTO ServiceImplementationRequests (id, request, arguments, isCustom, isInterService) VALUES
+  (100, 'ArmAlarmAway', 'PartitionNumber,ZoneNumber,User,UserCode', 0, 0),
+  (101, 'ArmAlarmStay', 'PartitionNumber,ZoneNumber,User,UserCode', 0, 0),
+  (102, 'DisarmAlarm', 'PartitionNumber,ZoneNumber,User,UserCode', 0, 0),
+  (110, 'SetAuxiliary2On', '', 0, 0), (111, 'SetAuxiliary2Off', '', 0, 0);
+INSERT INTO ServiceImplementationRequestMap (ServiceImplementationZonedService_id, ServiceImplementationRequests_id) VALUES
+  (9, 100), (9, 101), (9, 102), (10, 110), (10, 111);

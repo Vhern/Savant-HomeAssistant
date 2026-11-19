@@ -48,9 +48,11 @@ func TestAppDBEntities(t *testing.T) {
 			ids = append(ids, m.ID)
 		}
 	}
-	want := "button.test_host_002_1025__button_37 button.test_host_002_1026__button_36 button.test_host_004_6 camera.porch_camera_security_camera1 " +
-		"cover.test_host_002_1__zone_13 light.test_host_001_4 light.test_host_002_17__zone_57 light.test_host_002_2__zone_43 " +
-		"media_player.den media_player.den_apple_tv remote.den_apple_tv switch.test_host_cove_scene"
+	want := "button.ev_charger_den_driveway_charger_start button.ev_charger_den_driveway_charger_stop button.test_host_002_1025__button_37 button.test_host_002_1026__button_36 button.test_host_004_6 camera.porch_camera_security_camera1 " +
+		"climate.den_tstat_1 cover.garage_controller_2 cover.test_host_002_1__zone_13 light.test_host_001_4 light.test_host_002_17__zone_57 light.test_host_002_2__zone_43 " +
+		"media_player.den media_player.den_apple_tv remote.den_apple_tv sensor.ev_charger_den_driveway_charger_power " +
+		"sensor.ev_charger_den_driveway_charger_status sensor.water_heater_den_water_heater_remaining switch.pool_aux_pool_controller_2 switch.test_host_cove_scene " +
+		"water_heater.water_heater_den_water_heater"
 	if got := strings.Join(ids, " "); got != want {
 		t.Fatalf("ids:\n got %s\nwant %s", got, want)
 	}
@@ -250,4 +252,131 @@ func fmtAttrs(m map[string]any) string {
 		b.WriteString(fmt.Sprint(v))
 	}
 	return b.String()
+}
+
+func TestThermostatAndGarage(t *testing.T) {
+	inv := appInventory(t)
+	e := byID(must2(Build(inv, quiet)))
+	tstat, ok := e["climate.den_tstat_1"].(*Thermostat)
+	if !ok {
+		t.Fatalf("no thermostat: %v", keys(e))
+	}
+	if tstat.Single || !reflect.DeepEqual(tstat.Attributes["modes"], []string{"heat", "cool", "auto"}) ||
+		tstat.Attributes["min_temp"] != 50.0 || tstat.Device.Name != "Climate" ||
+		!reflect.DeepEqual(tstat.Attributes["fan_modes"], []string{"auto", "on"}) {
+		t.Errorf("thermostat = %+v", tstat.Meta)
+	}
+	p := "Den Tstat.HVAC_controller."
+	v := Values{p + "ThermostatCurrentTemperature_1": "71", p + "ThermostatCurrentHeatPoint_1": "68",
+		p + "ThermostatCurrentCoolPoint_1": "76", p + "ThermostatMode_1": "Auto", p + "ThermostatHVACState_1": "Idle",
+		p + "ThermostatFanMode_1": "Off or Auto"}
+	want := map[string]any{"temperature": 71.0, "heat": 68.0, "cool": 76.0, "mode": "auto", "action": "idle", "fan": "auto"}
+	if got := tstat.State(v); !reflect.DeepEqual(got, want) {
+		t.Errorf("thermostat state = %v", got)
+	}
+	h := &fakeHost{states: map[string]string{}}
+	ctx := context.Background()
+	must(t, tstat.Do(ctx, h, "set_temperature", Params{"heat": 67.0, "cool": 77.5}))
+	must(t, tstat.Do(ctx, h, "set_mode", Params{"mode": "cool"}))
+	svc := "Den|Den Tstat|HVAC_controller|1|SVC_ENV_HVAC "
+	if want := []string{svc + "SetHeatPointTemperature ThermostatAddress=1 HeatPointTemperature=67",
+		svc + "SetCoolPointTemperature ThermostatAddress=1 CoolPointTemperature=77.5", svc + "SetHVACModeCool ThermostatAddress=1"}; !reflect.DeepEqual(h.reqs, want) {
+		t.Errorf("sent %q", h.reqs)
+	}
+
+	g := e["cover.garage_controller_2"]
+	if g == nil || g.Info().Device.Name != "Garage" || g.Info().Attributes["stop"] != true {
+		t.Fatalf("garage = %v", g)
+	}
+	gs := "Garage Controller.Garage_controller."
+	if got := g.State(Values{gs + "GarageDoorStatus_2": "Opening", gs + "GarageDoorError_2": "0"}); !reflect.DeepEqual(got, map[string]any{"state": "opening"}) {
+		t.Errorf("garage state = %v", got)
+	}
+	if got := g.State(Values{gs + "GarageDoorStatus_2": "1"}); got["state"] != "open" {
+		t.Errorf("garage state = %v", got)
+	}
+	h.reqs = nil
+	must(t, g.Do(ctx, h, "close", nil))
+	if want := []string{"Den|Garage Controller|Garage_controller|1|SVC_ENV_GARAGE CloseGarageDoor GarageDoorAddress=2"}; !reflect.DeepEqual(h.reqs, want) {
+		t.Errorf("sent %q", h.reqs)
+	}
+}
+
+func TestDeviceStatusAndRemotes(t *testing.T) {
+	inv := appInventory(t)
+	inv.Known = map[string]bool{}
+	for _, n := range []string{"global.Den TV.ControlIsConnected", "Den TV.HD_monitor.IsPowered", "global.Den Apple TV.ControlIsConnected",
+		"global.Family AVR.ControlIsConnected", "Family AVR.Receiver.CurrentInput", "Family AVR.Receiver_2.IsPowered",
+		"global.Test Host.ControlIsConnected", "00AA11BB22CC33DD.BatteryLevel"} {
+		inv.Known[n] = true
+	}
+	inv.Remotes = []ProRemote{{ID: "00AA11BB22CC33DD", Name: "Kitchen Remote", Model: "Pro Remote", Make: "Savant"}}
+	e := byID(must2(Build(inv, quiet)))
+
+	tv := e["binary_sensor.den_tv_connected"]
+	if tv == nil || tv.Info().Device.Model != "OLED(xx)A1" || tv.Info().Device.Manufacturer != "LG" || tv.Info().Zone != "Den" {
+		t.Fatalf("tv connected = %+v", tv)
+	}
+	if got := e["binary_sensor.den_tv_power"].State(Values{"Den TV.HD_monitor.IsPowered": "0.0"}); got["on"] != false {
+		t.Errorf("tv power = %v", got)
+	}
+	atv := e["binary_sensor.den_apple_tv_connected"].Info().Device
+	if atv.ID != "source_den_apple_tv" || atv.Manufacturer != "Apple" {
+		t.Errorf("the Apple TV's status belongs on its source device: %+v", atv)
+	}
+	if e["sensor.family_avr_input"] == nil || e["binary_sensor.family_avr_zone_2_power"].Info().Name != "Zone 2 Power" {
+		t.Errorf("receiver entities missing: %v", keys(e))
+	}
+	if e["binary_sensor.test_host_connected"] != nil {
+		t.Error("the host itself already has a connection sensor")
+	}
+	bat := e["sensor.remote_00aa11bb22cc33dd_battery"]
+	if bat == nil || bat.Info().Device.Name != "Kitchen Remote" || bat.Info().Attributes["device_class"] != nil {
+		t.Fatalf("remote battery = %+v", bat)
+	}
+	if got := bat.State(Values{"00AA11BB22CC33DD.BatteryLevel": "87"}); got["value"] != "87" {
+		t.Errorf("battery shows Savant's value as is: %v", got)
+	}
+	if e["sensor.remote_00aa11bb22cc33dd_wifi"] != nil {
+		t.Error("only states the remote has get a sensor")
+	}
+	if got := findRemotes(inv); !reflect.DeepEqual(got, []string{"00AA11BB22CC33DD"}) {
+		t.Errorf("remotes = %v", got)
+	}
+}
+
+func keys[V any](m map[string]V) []string { return sortedKeys(m) }
+
+func TestAlarmAndPool(t *testing.T) {
+	e := byID(must2(Build(appInventory(t), quiet)))
+	h := &fakeHost{states: map[string]string{}}
+	ctx := context.Background()
+
+	panel := "alarm_control_panel.security_alarm_panel_1"
+	for raw, want := range map[string]any{"ArmedAway": "armed_away", "ArmedStay": "armed_home", "ArmedNightStay": "armed_night",
+		"Disarmed": "disarmed", "AlarmTriggered": "triggered", "Exit Delay": nil} {
+		if got := e[panel].State(Values{"Alarm Panel.Security_system.CurrentPartitionArmingStatus_1": raw}); got["state"] != want || got["status"] != raw {
+			t.Errorf("%q -> %v, want %v", raw, got, want)
+		}
+	}
+	if m := e[panel].Info().Attributes["modes"]; !reflect.DeepEqual(m, []string{"arm_away", "arm_home"}) {
+		t.Errorf("alarm modes = %v", m)
+	}
+	must(t, e[panel].Do(ctx, h, "arm_away", Params{"code": "1234"}))
+	if want := []string{"SAVANT_GLOBAL_ENV_ZONE|Alarm Panel|Security_system|1|SVC_ENV_SECURITYSYSTEM ArmAlarmAway PartitionNumber=1 UserCode=1234"}; !reflect.DeepEqual(h.reqs, want) {
+		t.Errorf("sent %q", h.reqs)
+	}
+	if err := e[panel].Do(ctx, h, "arm_night", nil); err == nil {
+		t.Error("the panel has no ArmAlarmNight request")
+	}
+	zone := e["sensor.security_zone_alarm_panel_1_3"]
+	if got := zone.State(Values{"Alarm Panel.Security_system.CurrentZoneStatus_3": "Faulted"}); got["value"] != "Faulted" {
+		t.Errorf("zone shows Savant's own text: %v", got)
+	}
+
+	h.reqs = nil
+	must(t, e["switch.pool_aux_pool_controller_2"].Do(ctx, h, "turn_on", nil))
+	if want := []string{"Den|Pool Controller|Pool_controller|1|SVC_ENV_POOLANDSPA SetAuxiliary2On"}; !reflect.DeepEqual(h.reqs, want) {
+		t.Errorf("sent %q", h.reqs)
+	}
 }

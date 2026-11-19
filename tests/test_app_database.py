@@ -9,6 +9,7 @@ from homeassistant.components.camera import async_get_stream_source
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 
 from custom_components.savant.camera import split_login
 from custom_components.savant.const import DOMAIN
@@ -31,6 +32,19 @@ STATES = {
     "Energy.Total.Consumption.Power": "72",
     "Energy.TotalToday.Consumption.Power": "76.88",
     "Energy.Circuit.Pendants 1.Power": "20",
+    "Den Tstat.HVAC_controller.ThermostatCurrentTemperature_1": "71",
+    "Den Tstat.HVAC_controller.ThermostatCurrentHeatPoint_1": "68",
+    "Den Tstat.HVAC_controller.ThermostatCurrentCoolPoint_1": "76",
+    "Den Tstat.HVAC_controller.ThermostatMode_1": "Auto",
+    "Den Tstat.HVAC_controller.ThermostatHVACState_1": "Cooling",
+    "Garage Controller.Garage_controller.GarageDoorStatus_2": "Opening",
+    "Den Charger.EV_charger.ChargerState_1": "Charging",
+    "Den Charger.EV_charger.ChargerPower_1": "7200",
+    "Den Heater.Water_heater.Temperature_1": "118",
+    "Den Heater.Water_heater.SetPoint_1": "120",
+    "Den Heater.Water_heater.Mode_1": "Eco",
+    "Alarm Panel.Security_system.CurrentPartitionArmingStatus_1": "Disarmed",
+    "Alarm Panel.Security_system.CurrentZoneStatus_3": "Open",
 }
 
 
@@ -155,3 +169,70 @@ async def test_source_remote(hass: HomeAssistant, savant_host) -> None:
     )
     log = savant_host.log()
     assert "SVC_AV_TV OSDCursorUp" in log and "SVC_AV_TV OSDSelect" in log
+
+
+async def test_thermostat_and_garage(hass: HomeAssistant, savant_host) -> None:
+    hass.config.units = US_CUSTOMARY_SYSTEM
+    add_app_database(savant_host)
+    await setup(hass, savant_host)
+
+    tstat = hass.states.get("climate.den_climate_main_floor")
+    assert tstat.state == "heat_cool" and tstat.attributes["hvac_action"] == "cooling"
+    assert tstat.attributes["current_temperature"] == 71
+    assert tstat.attributes["target_temp_low"] == 68 and tstat.attributes["target_temp_high"] == 76
+    assert set(tstat.attributes["hvac_modes"]) == {"off", "heat", "cool", "heat_cool"}
+    await hass.services.async_call(
+        "climate", "set_temperature",
+        {"entity_id": "climate.den_climate_main_floor", "target_temp_low": 66, "target_temp_high": 75}, blocking=True,
+    )
+    log = savant_host.log()
+    assert "SetHeatPointTemperature ThermostatAddress 1 HeatPointTemperature 66" in log
+    assert "SetCoolPointTemperature ThermostatAddress 1 CoolPointTemperature 75" in log
+    await hass.services.async_call(
+        "climate", "set_hvac_mode", {"entity_id": "climate.den_climate_main_floor", "hvac_mode": "off"}, blocking=True
+    )
+    assert "SetHVACModeOff ThermostatAddress 1" in savant_host.log()
+
+    door = hass.states.get("cover.den_garage_left_door")
+    assert door.state == "opening" and door.attributes["device_class"] == "garage"
+    await hass.services.async_call("cover", "close_cover", {"entity_id": "cover.den_garage_left_door"}, blocking=True)
+    assert "CloseGarageDoor GarageDoorAddress 2" in savant_host.log()
+
+
+async def test_ev_charger_and_water_heater(hass: HomeAssistant, savant_host) -> None:
+    hass.config.units = US_CUSTOMARY_SYSTEM
+    add_app_database(savant_host)
+    await setup(hass, savant_host)
+
+    assert hass.states.get("sensor.den_driveway_charger_status").state == "Charging"
+    assert hass.states.get("sensor.den_driveway_charger_power").state == "7200"
+    await hass.services.async_call("button", "press", {"entity_id": "button.den_driveway_charger_stop_charging"}, blocking=True)
+    assert "StopCharging Address1 1" in savant_host.log()
+
+    heater = hass.states.get("water_heater.den_water_heater")
+    assert heater.attributes["current_temperature"] == 118 and heater.attributes["temperature"] == 120
+    assert heater.state == "Eco"
+    await hass.services.async_call(
+        "water_heater", "set_temperature", {"entity_id": "water_heater.den_water_heater", "temperature": 125}, blocking=True
+    )
+    assert "SetWaterTemperature Address1 1 Temperature 125" in savant_host.log()
+
+
+async def test_alarm_and_pool(hass: HomeAssistant, savant_host) -> None:
+    add_app_database(savant_host)
+    await setup(hass, savant_host)
+    assert not hass.states.async_entity_ids("fan")
+
+    panel = hass.states.get("alarm_control_panel.security_house")
+    assert panel.state == "disarmed" and panel.attributes["savant_status"] == "Disarmed"
+    await hass.services.async_call(
+        "alarm_control_panel", "alarm_arm_away", {"entity_id": "alarm_control_panel.security_house", "code": "1234"},
+        blocking=True,
+    )
+    assert "ArmAlarmAway PartitionNumber 1 UserCode 1234" in savant_host.log()
+    assert hass.states.get("sensor.security_front_door").state == "Open"
+
+    await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.den_pool_spa_pool_light"}, blocking=True)
+    assert "SetAuxiliary2On" in savant_host.log()
+    light = hass.states.get("switch.den_pool_spa_pool_light")
+    assert light.state == "unknown" and light.attributes["assumed_state"] is True

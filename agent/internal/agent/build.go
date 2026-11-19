@@ -43,6 +43,7 @@ type Inventory struct {
 	App        *savantcfg.AppDB               `json:"-"`
 	Circuits   []savantcfg.Circuit            `json:"circuits,omitempty"`
 	Known      map[string]bool                `json:"-"`
+	Remotes    []ProRemote                    `json:"remotes,omitempty"`
 	Defs       *savantcfg.Services            `json:"-"`
 	Manifest   savantcfg.Manifest             `json:"-"`
 	StateNames []string                       `json:"state_names,omitempty"`
@@ -132,6 +133,14 @@ func Collect(ctx context.Context, tr transport.Transport, cfg config.Config, ver
 		if withStateNames {
 			inv.StateNames = names
 		}
+	}
+	for _, id := range findRemotes(inv) {
+		r := ProRemote{ID: id}
+		keys := []string{id + ".Name", id + ".DeviceModel", id + ".DeviceMake"}
+		if v, err := tr.ReadStates(ctx, keys); err == nil {
+			r.Name, r.Model, r.Make = strings.TrimSpace(v[keys[0]]), strings.TrimSpace(v[keys[1]]), strings.TrimSpace(v[keys[2]])
+		}
+		inv.Remotes = append(inv.Remotes, r)
 	}
 
 	inv.Scenes = collectScenes(ctx, tr, inv, log)
@@ -277,6 +286,14 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 		if fromApp[platform] {
 			continue
 		}
+		if platform == "climate" {
+			if t := rowThermostat(inv, r); t != nil {
+				add(t)
+			} else {
+				skipped = append(skipped, Skipped{what, "no current temperature state"})
+			}
+			continue
+		}
 		tgt := resolveTarget(inv, r)
 		meta := Meta{
 			ID:       platform + "." + objectID(r),
@@ -312,6 +329,7 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 		}
 	}
 
+	sourceDevices := map[string][]*Device{}
 	for _, z := range inv.Zones {
 		room := buildMediaRoom(inv, z)
 		if room == nil {
@@ -320,6 +338,9 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 		add(room)
 		for _, src := range room.Sources {
 			player := sourcePlayer(room, src)
+			comp := src.Service.Component
+			addModel(inv, comp, player.Device)
+			sourceDevices[comp] = append(sourceDevices[comp], player.Device)
 			add(player)
 			if r := sourceRemote(player); r != nil {
 				add(r)
@@ -350,6 +371,14 @@ func Build(inv *Inventory, log *slog.Logger) ([]Entity, []Skipped) {
 	}
 	for _, s := range energySensors(inv.Circuits) {
 		add(s)
+	}
+	for _, e := range componentStatus(inv, sourceDevices) {
+		add(e)
+	}
+	for _, r := range inv.Remotes {
+		for _, e := range remoteEntities(inv, r) {
+			add(e)
+		}
 	}
 
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Info().ID < out[j].Info().ID })
@@ -615,6 +644,8 @@ func tableKind(r savantcfg.Row) (string, bool) {
 		return "cover", true
 	case "SVC_ENV_DOORLOCK":
 		return "lock", true
+	case "SVC_ENV_HVAC", "SVC_ENV_SINGLE_SETPOINT_HVAC":
+		return "climate", true
 	}
 	switch strings.ToLower(r.Table) {
 	case "lighting":
@@ -623,6 +654,8 @@ func tableKind(r savantcfg.Row) (string, bool) {
 		return "cover", true
 	case "door lock":
 		return "lock", true
+	case "hvac":
+		return "climate", true
 	}
 	return "", false
 }

@@ -13,12 +13,66 @@ import (
 // AppDB is serviceImplementation.sqlite: the model the Savant app itself uses.
 // Unlike serviceImplementation.xml it stays readable on Savant 12 Mac hosts.
 type AppDB struct {
-	Path     string
-	Lights   []AppLight
-	Shades   []AppShade
-	Locks    []AppLock
-	Cameras  []AppCamera
-	Services *Services
+	Path    string
+	Lights  []AppLight
+	Shades  []AppShade
+	Locks   []AppLock
+	Cameras []AppCamera
+	HVAC    []AppHVAC
+	Garages []AppGarage
+	Alarms  []AppAlarm
+	Pools   []AppPool
+	// Chargers and WaterHeaters name their own commands and states.
+	Chargers     []AppTable
+	WaterHeaters []AppTable
+	// Components are the devices in Blueprint by component name, with their room and model.
+	Components map[string]AppComponent
+	Services   *Services
+}
+
+type AppComponent struct {
+	Zone, Model, Manufacturer, DeviceType string
+}
+
+type AppHVAC struct {
+	ID               int
+	Zone, Name       string
+	Addresses        []string
+	State            string
+	Heat, Cool, Auto bool
+	Humidity         bool
+	MinTemp, MaxTemp float64
+	Celsius          bool
+}
+
+type AppGarage struct {
+	ID                        int
+	Zone, Name                string
+	Addresses                 []string
+	Toggle, Open, Stop, Close string
+	OpenState, ErrorState     string
+}
+
+type AppAlarm struct {
+	ID                       int
+	Zone, Name, Component    string
+	Type                     string // partition or zone
+	Partition, AlarmZone     string
+	StatusState, BypassState string
+}
+
+type AppPool struct {
+	ID               int
+	Zone, Name, Type string
+	Aux              string
+}
+
+// AppTable is a row whose columns are request and state names, like
+// startCommand or chargerState.
+type AppTable struct {
+	ID         int
+	Zone, Name string
+	Fields     map[string]string
 }
 
 // AppCamera URLs can carry the camera's login, as Blueprint stores them.
@@ -139,6 +193,55 @@ func ReadAppDB(ctx context.Context, path string) (*AppDB, error) {
 		}
 	}
 
+	if rows, err := sqlRows(ctx, path, "HVACEntities", []string{"id", "zoneID", "name", "addresses", "stateName",
+		"heat", "cool", "auto", "humiditySetPoints", "tempMinRange", "tempMaxRange", "isCelsius"}, "order by id"); err == nil {
+		for _, r := range rows {
+			id, _ := strconv.Atoi(r[0])
+			lo, _ := strconv.ParseFloat(r[9], 64)
+			hi, _ := strconv.ParseFloat(r[10], 64)
+			db.HVAC = append(db.HVAC, AppHVAC{
+				ID: id, Zone: zones[r[1]], Name: r[2], Addresses: addresses(r[3]), State: r[4],
+				Heat: flag(r[5]), Cool: flag(r[6]), Auto: flag(r[7]), Humidity: flag(r[8]),
+				MinTemp: lo, MaxTemp: hi, Celsius: flag(r[11]),
+			})
+		}
+	}
+	if rows, err := sqlRows(ctx, path, "GarageEntities", []string{"id", "zoneID", "name", "addresses", "toggleCommand",
+		"openCommand", "stopCommand", "closeCommand", "openState", "errorState"}, "order by id"); err == nil {
+		for _, r := range rows {
+			id, _ := strconv.Atoi(r[0])
+			db.Garages = append(db.Garages, AppGarage{ID: id, Zone: zones[r[1]], Name: r[2], Addresses: addresses(r[3]),
+				Toggle: r[4], Open: r[5], Stop: r[6], Close: r[7], OpenState: r[8], ErrorState: r[9]})
+		}
+	}
+	if rows, err := sqlRows(ctx, path, "SecuritySystemEntities", []string{"id", "zoneID", "name", "componentName",
+		"entityType", "partitionNumber", "zoneNumber", "statusState", "bypassToggleState"}, "order by id"); err == nil {
+		for _, r := range rows {
+			id, _ := strconv.Atoi(r[0])
+			db.Alarms = append(db.Alarms, AppAlarm{ID: id, Zone: zones[r[1]], Name: r[2], Component: r[3], Type: r[4],
+				Partition: r[5], AlarmZone: r[6], StatusState: r[7], BypassState: r[8]})
+		}
+	}
+	if rows, err := sqlRows(ctx, path, "PoolAndSpaEntities", []string{"id", "zoneID", "name", "entityType", "auxiliaryNumber"}, "order by id"); err == nil {
+		for _, r := range rows {
+			id, _ := strconv.Atoi(r[0])
+			db.Pools = append(db.Pools, AppPool{ID: id, Zone: zones[r[1]], Name: r[2], Type: r[3], Aux: r[4]})
+		}
+	}
+	db.Chargers = tableRows(ctx, path, zones, "EVChargerEntities", []string{"address", "startCommand", "stopCommand",
+		"setRateCommand", "chargerState", "errorState", "powerState", "chargeRateState", "chargeModeState",
+		"maxChargeRateState", "currentSessionEnergyState", "lastSessionEnergyState"})
+	db.WaterHeaters = tableRows(ctx, path, zones, "HotWaterHeaterEntities", []string{"address", "setTempCommand",
+		"setCapacityCommand", "setModeCommand", "currentSetPointState", "currentCapacityState", "currentModeState",
+		"currentTempState", "timeToSetPointState", "hotWaterRemainState"})
+
+	db.Components = map[string]AppComponent{}
+	if rows, err := sqlRows(ctx, path, "ZoneConfigComponents", []string{"component", "zone", "model", "manufacturer", "deviceType"}, ""); err == nil {
+		for _, r := range rows {
+			db.Components[r[0]] = AppComponent{Zone: r[1], Model: r[2], Manufacturer: r[3], DeviceType: r[4]}
+		}
+	}
+
 	db.Services, err = readDBServices(ctx, path)
 	return db, err
 }
@@ -227,6 +330,30 @@ func sqlRows(ctx context.Context, path, from string, cols []string, tail string)
 		rows = append(rows, f)
 	}
 	return rows, nil
+}
+
+func tableRows(ctx context.Context, path string, zones map[string]string, table string, cols []string) []AppTable {
+	rows, err := sqlRows(ctx, path, table, append([]string{"id", "zoneID", "name"}, cols...), "order by id")
+	if err != nil {
+		return nil
+	}
+	var out []AppTable
+	for _, r := range rows {
+		id, _ := strconv.Atoi(r[0])
+		t := AppTable{ID: id, Zone: zones[r[1]], Name: r[2], Fields: map[string]string{}}
+		for i, c := range cols {
+			t.Fields[c] = r[3+i]
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// flag reads the database's 1/0 columns; a count like "2" setpoints is true too.
+func flag(s string) bool {
+	s = strings.TrimSpace(s)
+	n, err := strconv.Atoi(s)
+	return (err == nil && n > 0) || strings.EqualFold(s, "true")
 }
 
 func or(a, b string) string {

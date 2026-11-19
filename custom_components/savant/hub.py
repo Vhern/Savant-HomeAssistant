@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections.abc import Callable
 from typing import Any
 
@@ -22,7 +23,9 @@ from .const import (
     CONF_PRIVATE_KEY,
     CONF_SSH_PORT,
     CONF_TOKEN,
+    CONF_UNIT,
     DOMAIN,
+    SSH_SLOTS,
 )
 from .installer import AuthFailed, HostKeyChanged, Installer, bundled_version
 
@@ -78,6 +81,13 @@ async def connect_agent(
     return ws, hello, msg["result"]
 
 
+def area_name(unit: str, zone: str | None) -> str | None:
+    """A Savant room's area, prefixed with the unit name only when the host has one."""
+    if not zone:
+        return unit or None
+    return f"{unit} {zone}" if unit else zone
+
+
 class SavantHub:
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
@@ -97,6 +107,7 @@ class SavantHub:
         self.session = async_get_clientsession(hass)
         self.info: dict[str, Any] = {}
         self.host_device_id: str | None = None
+        self.unit: str = (entry.options.get(CONF_UNIT) or "").strip()
         self.entities: dict[str, dict[str, Any]] = {}
         self.states: dict[str, dict[str, Any] | None] = {}
         self.connected = False
@@ -119,8 +130,11 @@ class SavantHub:
     def issue_id(self) -> str:
         return f"unreachable_{self.entry.entry_id}"
 
+    def area(self, zone: str | None) -> str | None:
+        return area_name(self.unit, zone)
+
     def host_device(self) -> DeviceInfo:
-        return DeviceInfo(
+        info = DeviceInfo(
             identifiers={(DOMAIN, self.uid)},
             name=self.info.get("name") or "Savant Host",
             manufacturer="Savant",
@@ -128,16 +142,19 @@ class SavantHub:
             sw_version=self.info.get("software"),
             serial_number=self.info.get("uid"),
         )
+        if self.unit:
+            info["suggested_area"] = self.unit
+        return info
 
     def device_identifier(self, key: str) -> tuple[str, str]:
         return (DOMAIN, f"{self.uid}_{key}")
 
-    def entity_device(self, key: str, name: str, zone: str | None, model: str) -> DeviceInfo:
-        info = DeviceInfo(identifiers={self.device_identifier(key)}, name=name, manufacturer="Savant", model=model)
+    def entity_device(self, key: str, name: str, zone: str | None, model: str, manufacturer: str | None = None) -> DeviceInfo:
+        info = DeviceInfo(identifiers={self.device_identifier(key)}, name=name, manufacturer=manufacturer or "Savant", model=model)
         if self.host_device_id:
             info["via_device_id"] = self.host_device_id
-        if zone:
-            info["suggested_area"] = zone
+        if area := self.area(zone):
+            info["suggested_area"] = area
         return info
 
     async def async_start(self) -> None:
@@ -181,7 +198,10 @@ class SavantHub:
         raise AgentError("unreachable")
 
     async def _repair(self, restart: bool = False) -> None:
-        result = await self.installer.ensure(self.token, self.agent_port, restart=restart)
+        # With many hosts (a building), only a few install or update over SSH at a time.
+        slots = self.hass.data.setdefault(DOMAIN, {}).setdefault("ssh_slots", asyncio.Semaphore(SSH_SLOTS))
+        async with slots:
+            result = await self.installer.ensure(self.token, self.agent_port, restart=restart)
         self.last_repair = result
         _LOGGER.info("Savant agent on %s: %s", self.host, result)
         updates = {}
@@ -204,6 +224,7 @@ class SavantHub:
                     return
                 _LOGGER.warning("Lost connection to the Savant agent on %s", self.host)
             delay = min(2**failures, MAX_BACKOFF)
+            delay += random.uniform(0, delay / 2)  # keeps many hosts from retrying in lockstep
             try:
                 current, snapshot = await self._connect()
             except OutdatedAgent:

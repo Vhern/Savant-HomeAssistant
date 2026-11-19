@@ -9,7 +9,14 @@ from typing import Any
 
 import aiohttp
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntryState, ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigEntryState,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlowWithReload,
+)
+from homeassistant.core import callback
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
@@ -21,6 +28,7 @@ from .const import (
     CONF_PRIVATE_KEY,
     CONF_SSH_PORT,
     CONF_TOKEN,
+    CONF_UNIT,
     DEFAULT_AGENT_PORT,
     DEFAULT_SSH_PORT,
     DEFAULT_USERNAME,
@@ -55,10 +63,27 @@ CONFIRM_SCHEMA = vol.Schema(
     }
 )
 REAUTH_SCHEMA = vol.Schema({vol.Required(CONF_PASSWORD): str})
+UNIT_FIELD = {vol.Optional(CONF_UNIT): str}
 
 
 class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> SavantOptionsFlow:
+        return SavantOptionsFlow()
+
+    def _with_unit(self, schema: vol.Schema) -> vol.Schema:
+        """The unit name is only asked for when this isn't the only Savant host."""
+        if self._async_current_entries(include_ignore=False):
+            return schema.extend(UNIT_FIELD)
+        return schema
+
+    @staticmethod
+    def _options(user_input: dict[str, Any]) -> dict[str, Any]:
+        unit = (user_input.get(CONF_UNIT) or "").strip()
+        return {CONF_UNIT: unit} if unit else {}
 
     async def _provision(
         self, host: str, port: int, username: str, password: str, token: str | None = None,
@@ -136,10 +161,12 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
                 data, info = res
                 await self.async_set_unique_id(info.get("uid") or data[CONF_HOST])
                 self._abort_if_unique_id_configured(updates={CONF_HOST: data[CONF_HOST]})
-                return self.async_create_entry(title=info.get("name") or data[CONF_HOST], data=data)
+                return self.async_create_entry(
+                    title=info.get("name") or data[CONF_HOST], data=data, options=self._options(user_input)
+                )
         return self.async_show_form(
             step_id="user",
-            data_schema=self.add_suggested_values_to_schema(USER_SCHEMA, user_input),
+            data_schema=self.add_suggested_values_to_schema(self._with_unit(USER_SCHEMA), user_input),
             errors=errors,
             description_placeholders={"error": self.error_detail[-400:]},
         )
@@ -184,10 +211,14 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
                 data[CONF_PRIMARY_UID] = found[CONF_PRIMARY_UID]
                 await self.async_set_unique_id(info.get("uid") or found[CONF_PRIMARY_UID], raise_on_progress=False)
                 self._abort_if_unique_id_configured(updates={CONF_HOST: data[CONF_HOST]})
-                return self.async_create_entry(title=info.get("name") or found["name"], data=data)
+                return self.async_create_entry(
+                    title=info.get("name") or found["name"], data=data, options=self._options(user_input)
+                )
         return self.async_show_form(
             step_id="zeroconf_confirm",
-            data_schema=self.add_suggested_values_to_schema(CONFIRM_SCHEMA, user_input),
+            data_schema=self.add_suggested_values_to_schema(
+                self._with_unit(CONFIRM_SCHEMA), user_input or {CONF_UNIT: found["name"]}
+            ),
             errors=errors,
             description_placeholders={
                 "name": found["name"],
@@ -261,4 +292,14 @@ class SavantConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=self.add_suggested_values_to_schema(USER_SCHEMA, user_input or suggested),
             errors=errors,
             description_placeholders={"error": self.error_detail[-400:]},
+        )
+
+
+class SavantOptionsFlow(OptionsFlowWithReload):
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=SavantConfigFlow._options(user_input))
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(vol.Schema(UNIT_FIELD), self.config_entry.options),
         )

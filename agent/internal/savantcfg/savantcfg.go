@@ -89,6 +89,9 @@ func (r Row) Zone() string {
 	return r.ControllerZone
 }
 
+// Flag reads a yes/no column like "Heat" or "Humidity".
+func (r Row) Flag(k string) bool { return truthy(r.Raw[k], false) }
+
 func (r Row) State(names ...string) string {
 	for _, s := range r.States {
 		for _, n := range names {

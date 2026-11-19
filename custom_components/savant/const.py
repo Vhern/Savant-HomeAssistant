@@ -10,6 +10,10 @@ CONF_HOST_KEY = "host_key"
 CONF_TOKEN = "token"
 CONF_AGENT_PORT = "agent_port"
 CONF_PRIMARY_UID = "primary_uid"
+# Only used when one Home Assistant runs several Savant systems, like the units in a building.
+CONF_UNIT = "unit"
+CONF_PLACED_UNIT = "placed_unit"
+SSH_SLOTS = 3
 
 DEFAULT_USERNAME = "RPM"
 DEFAULT_SSH_PORT = 22
@@ -20,9 +24,11 @@ AGENT_BIN = "savant-ha"
 KEY_COMMENT = "home-assistant-savant"
 
 PLATFORMS = [
+    Platform.ALARM_CONTROL_PANEL,
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
     Platform.CAMERA,
+    Platform.CLIMATE,
     Platform.COVER,
     Platform.LIGHT,
     Platform.LOCK,
@@ -31,6 +37,7 @@ PLATFORMS = [
     Platform.SCENE,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.WATER_HEATER,
 ]
 
 SERVICE_REQUEST = "service_request"

@@ -36,9 +36,10 @@ type Meta struct {
 // Device is how entities are grouped in Home Assistant: one device per room
 // and kind (Lighting, Shades, Keypads, Media) and one per A/V source.
 type Device struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Model string `json:"model"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Model        string `json:"model"`
+	Manufacturer string `json:"manufacturer,omitempty"`
 }
 
 func (m *Meta) Info() *Meta { return m }
@@ -847,6 +848,25 @@ func (c *Camera) States() []string            { return nil }
 func (c *Camera) State(Values) map[string]any { return map[string]any{} }
 func (c *Camera) Do(_ context.Context, _ Executor, action string, _ Params) error {
 	return errAction(&c.Meta, action)
+}
+
+// BoolSensor is an on/off state like a device's power or connection.
+type BoolSensor struct {
+	Meta
+	StateName string
+}
+
+func (s *BoolSensor) States() []string { return []string{s.StateName} }
+
+func (s *BoolSensor) State(v Values) map[string]any {
+	if b, ok := transport.ParseBool(v[s.StateName]); ok {
+		return map[string]any{"on": b}
+	}
+	return nil
+}
+
+func (s *BoolSensor) Do(_ context.Context, _ Executor, action string, _ Params) error {
+	return errAction(&s.Meta, action)
 }
 
 type Sensor struct {
